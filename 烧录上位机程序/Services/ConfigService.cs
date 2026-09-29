@@ -30,7 +30,6 @@ public sealed class ConfigService
     public static T Get<T>(string key) => _instance.GetInternal<T>(key);
     public static void Set(string key, object value) => _instance.SetInternal(key, value);
     public static void Flush() => _instance.FlushInternal();
-    public static string GetString(string key) => _instance.GetInternal<string>(key);
 
     private Dictionary<string, object> LoadDefaults() => new()
     {
@@ -65,14 +64,6 @@ public sealed class ConfigService
             if (_config.TryGetValue(key, out var val) && val is T t)
                 return t;
             return default!;
-        }
-    }
-
-    private string GetInternalString(string key)
-    {
-        lock (_lock)
-        {
-            return _config.TryGetValue(key, out var val) ? val?.ToString() ?? "" : "";
         }
     }
 

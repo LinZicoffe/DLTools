@@ -8,6 +8,4 @@ namespace 烧录上位机程序.Pages;
 /// </summary>
 public class BasePage : Page
 {
-    public virtual void Initialize() { }
-    public virtual void Shutdown() { }
 }

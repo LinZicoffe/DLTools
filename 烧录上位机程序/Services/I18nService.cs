@@ -11,15 +11,6 @@ namespace 烧录上位机程序.Services;
 public static class I18nService
 {
     private static readonly List<string> SupportedLangs = new() { "zh_CN", "zh_TW", "ja", "ko", "en", "fr" };
-    private static readonly Dictionary<string, string> LangNames = new()
-    {
-        ["zh_CN"] = "简体中文",
-        ["zh_TW"] = "繁體中文",
-        ["ja"] = "日本語",
-        ["ko"] = "한국어",
-        ["en"] = "English",
-        ["fr"] = "Français",
-    };
 
     private static Dictionary<string, string>? _translations;
     private static string _currentLang = "zh_CN";
@@ -62,10 +53,5 @@ public static class I18nService
             _translations ??= new Dictionary<string, string>();
         }
         LanguageChanged?.Invoke();
-    }
-
-    public static void SwitchLanguage(string lang)
-    {
-        LoadLanguage(lang);
     }
 }

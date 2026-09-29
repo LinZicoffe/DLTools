@@ -59,7 +59,8 @@ public partial class FlashPage : BasePage
             return;
         }
 
-        var fileFormat = Path.GetExtension(FilePathBox.Text).ToLower().TrimStart('.');
+        // Invariant：土耳其语等区域下 ToLower 会把 'I' 映射为 'ı'，导致 .BIN 识别失败
+        var fileFormat = Path.GetExtension(FilePathBox.Text).ToLowerInvariant().TrimStart('.');
 
         // .bin 文件不带地址信息，起始地址必须由用户提供（此前硬编码 0，
         // 而 STM32 等 Flash 基址在 0x08000000，向 0 地址烧录必然错误）
@@ -85,11 +86,12 @@ public partial class FlashPage : BasePage
             BinStartAddr = binStartAddr,
             EraseMode = EraseChip.IsChecked == true ? JLinkBackend.EraseModeChip : JLinkBackend.EraseModeSector,
             PostAction = GetPostAction(),
-            Serial = SerialBox.Text.Trim(),
-            EraseOnly = false
+            Serial = SerialBox.Text.Trim()
         };
 
-        _worker!.StartFlash(p);
+        // 仅在任务真正启动时翻转按钮；竞态下 StartFlash 拒绝重复启动时
+        // 不动按钮（否则再无事件恢复，按钮会永久卡死）
+        if (!_worker!.StartFlash(p)) return;
         StartBtn.IsEnabled = false;
         StopBtn.IsEnabled = true;
     }

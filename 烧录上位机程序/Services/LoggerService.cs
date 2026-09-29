@@ -38,7 +38,10 @@ public static class LoggerService
                 {
                     _logWriter?.Dispose();
                     var logFile = Path.Combine(LogDir, $"rtt_{date}.log");
-                    _logWriter = new StreamWriter(logFile, true) { AutoFlush = true };
+                    // FileShare.ReadWrite：允许外部工具在程序运行期间读取日志
+                    // （StreamWriter(path) 默认 FileShare.Read 会锁住文件）
+                    var stream = new FileStream(logFile, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                    _logWriter = new StreamWriter(stream) { AutoFlush = true };
                     _currentDate = date;
                 }
                 _logWriter.WriteLine($"[{DateTime.Now:HH:mm:ss}] [{level}] {message}");

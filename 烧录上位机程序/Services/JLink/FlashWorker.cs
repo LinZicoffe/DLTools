@@ -42,12 +42,17 @@ public partial class FlashWorker : ObservableObject
 
     #region Public Methods
 
-    public void StartFlash(FlashParams p)
+    /// <summary>
+    /// 启动烧录任务。返回 false 表示已有任务在跑被拒绝（调用方据此不翻转按钮状态，
+    /// 否则竞态下按钮会被永久卡死：早退后没有任何事件再来恢复按钮）。
+    /// </summary>
+    public bool StartFlash(FlashParams p)
     {
-        if (IsBusy) return;
+        if (IsBusy) return false;
         IsBusy = true;
         _cts = new CancellationTokenSource();
         _currentTask = Task.Run(() => RunFlash(p, _cts.Token));
+        return true;
     }
 
     public void StopFlash()
@@ -79,14 +84,8 @@ public partial class FlashWorker : ObservableObject
                 DeviceName = p.DeviceName,
                 Interface = p.Interface,
                 SpeedKhz = p.SpeedKhz,
-                FilePath = p.FilePath,
-                FileFormat = p.FileFormat,
-                BinStartAddr = p.BinStartAddr,
-                EraseMode = p.EraseMode,
-                PostAction = p.PostAction,
                 Serial = p.Serial,
-                RemoteAddr = p.RemoteAddr,
-                EraseOnly = p.EraseOnly
+                RemoteAddr = p.RemoteAddr
             };
 
             // Stage: Connect
@@ -94,15 +93,6 @@ public partial class FlashWorker : ObservableObject
             backend.Connect(probeParams);
             FlashLog?.Invoke("info", string.Format(I18nService.GetString("目标已连接: {0}"), p.DeviceName));
             ct.ThrowIfCancellationRequested();
-
-            if (p.EraseOnly)
-            {
-                FlashStageChanged?.Invoke("erase");
-                backend.Erase(JLinkBackend.EraseModeChip);
-                backend.Close();
-                FlashFinished?.Invoke(true, I18nService.GetString("整片擦除完成"));
-                return;
-            }
 
             // Erase
             if (p.EraseMode == JLinkBackend.EraseModeChip)
@@ -177,5 +167,4 @@ public class FlashParams
     public string PostAction { get; set; } = "reset_run";
     public string Serial { get; set; } = "";
     public string RemoteAddr { get; set; } = "";
-    public bool EraseOnly { get; set; } = false;
 }

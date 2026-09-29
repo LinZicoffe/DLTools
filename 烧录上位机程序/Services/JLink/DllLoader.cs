@@ -145,10 +145,14 @@ public sealed class DllLoader : IDisposable
 
     public static string? FindDllPath()
     {
-        // 官方安装目录优先：IAR 等工具链捆绑的 JLink DLL 版本常较旧，
+        // exe 同目录优先：支持把 DLL 放在程序旁边的绿色部署
+        // （且不先探测 exe 目录的话，FindDllPath 返回 null 会直接抛异常，
+        //   根本走不到 LoadLibrary 本可命中的默认搜索）
+        // 官方安装目录次之：IAR 等工具链捆绑的 JLink DLL 版本常较旧，
         // 若排在前面会被静默优先选用
         var candidates = new[]
         {
+            Path.Combine(AppContext.BaseDirectory, "JLink_x64.dll"),
             @"C:\Program Files\SEGGER\JLinkARM_DLL\JLink_x64.dll",
             @"C:\Program Files (x86)\SEGGER\JLinkARM_DLL\JLink_x64.dll",
             @"C:\iar\ewarm-9.60.4\arm\bin\JLink_x64.dll",
@@ -205,12 +209,6 @@ public sealed class DllLoader : IDisposable
     {
         return GetDelegate<GetDLLVersionDelegate>("JLINKARM_GetDLLVersion")();
     }
-
-    // 版本编码为十进制打包：major*10000 + minor*100 + patch。
-    // 实测本机 DLL 稳定返回 97600 = 9.76，与 PE 资源一致（首测曾见瞬态 97344）。
-    // 编码未在 SEGGER 文档中确认，此解码仅作展示用途，烧录链路不依赖它。
-    public int GetVersionMajor() => GetDLLVersion() / 10000;
-    public int GetVersionMinor() => (GetDLLVersion() % 10000) / 100;
 
     /// <summary>DLL 是否已打开仿真器（JLINKARM_IsOpen）。</summary>
     public bool IsDllOpen()

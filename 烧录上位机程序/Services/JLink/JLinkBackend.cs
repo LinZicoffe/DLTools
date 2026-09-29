@@ -156,7 +156,7 @@ public sealed class JLinkBackend : IDisposable
                 _log("warn", $"WriteMem 返回 {written}/{data.Length} 字节 @ 0x{start:X8}");
 
             done += len;
-            int percent = Math.Min(100, done * 100 / totalBytes);
+            int percent = (int)Math.Min(100, (long)done * 100 / totalBytes); // long：防 >21MB 固件时 int 溢出为负
             onProgress?.Invoke(percent, 100);
             _log("info", $"已烧录 {len} B @ 0x{start:X8}");
         }
@@ -200,7 +200,9 @@ public sealed class JLinkBackend : IDisposable
         _dll.Reset();
         if (halt && !run)
         {
-            _dll.Halt();
+            // 容忍失败（与 TryHalt 一致）：复位后核心通常已停在 halt 态，
+            // 对已停核心再 Halt 可能返回非 0——不应让烧录+校验已成功的一轮被误报为失败
+            TryHalt();
             _log("info", "CPU halted after reset");
         }
         else if (run)

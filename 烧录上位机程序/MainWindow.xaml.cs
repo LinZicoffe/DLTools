@@ -9,6 +9,9 @@ namespace 烧录上位机程序;
 public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 {
     private bool _forceClose;
+    // 已确认退出、正在等待后台烧录任务结束期间为 true：
+    // 此时再点 X 直接忽略，避免弹第二个确认框与产生分歧的关闭链
+    private bool _closingInProgress;
     // 语言下拉框程序化赋值期间为 true：此时 SelectionChanged 属初始化回声，
     // 不应再触发 LoadLanguage/写配置（否则每次启动都重写 user_prefs.json）
     private bool _suppressLanguageEvent;
@@ -27,6 +30,13 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
     protected override async void OnClosing(CancelEventArgs e)
     {
+        if (_closingInProgress)
+        {
+            // 等待后台任务退出期间的重复关窗请求：吞掉（首轮流程会完成关闭）
+            e.Cancel = true;
+            return;
+        }
+
         if (!_forceClose &&
             DataContext is ViewModels.MainWindowViewModel vm &&
             vm.CurrentPage is FlashPage page &&
@@ -41,6 +51,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                 I18nService.GetString("确认退出"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (answer != MessageBoxResult.Yes) return;
 
+            _closingInProgress = true;
             try
             {
                 page.RequestStopFlash();
@@ -48,9 +59,12 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                     await Task.WhenAny(t, Task.Delay(System.TimeSpan.FromSeconds(15)));
             }
             catch { /* 关窗路径上不再抛出，超时后仍强制退出 */ }
-
-            _forceClose = true;
-            Close();
+            finally
+            {
+                _closingInProgress = false;
+                _forceClose = true;
+                Close();
+            }
             return;
         }
 
