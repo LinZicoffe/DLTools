@@ -96,7 +96,6 @@ public partial class FlashWorker : ObservableObject
                 BinStartAddr = p.BinStartAddr,
                 EraseMode = p.EraseMode,
                 PostAction = p.PostAction,
-                ExtraVerify = p.ExtraVerify,
                 Serial = p.Serial,
                 RemoteAddr = p.RemoteAddr,
                 EraseOnly = p.EraseOnly
@@ -143,14 +142,12 @@ public partial class FlashWorker : ObservableObject
             backend.Program(p.FilePath, p.FileFormat, p.BinStartAddr, OnProgress, ct);
             AddLog("[info] 烧录完成");
 
-            // Verify
-            if (p.ExtraVerify)
-            {
-                FlashStageChanged?.Invoke("verify");
-                SetStage("校验中...");
-                backend.Verify(p.FilePath, p.FileFormat, p.BinStartAddr, ct);
-                AddLog("[info] 校验通过");
-            }
+            // Verify（必选：写完必须读回比对。DLL 层不报错不代表数据真的落进了 Flash，
+            // 缺了这一步就会出现"烧录失败但日志显示成功"）
+            FlashStageChanged?.Invoke("verify");
+            SetStage("校验中...");
+            backend.Verify(p.FilePath, p.FileFormat, p.BinStartAddr, ct);
+            AddLog("[info] 校验通过");
 
             // Reset
             if (p.PostAction != JLinkBackend.PostActionNone)
@@ -217,7 +214,6 @@ public class FlashParams
     public int SpeedKhz { get; set; } = 4000;
     public string EraseMode { get; set; } = "sector";
     public string PostAction { get; set; } = "reset_run";
-    public bool ExtraVerify { get; set; } = false;
     public string Serial { get; set; } = "";
     public string RemoteAddr { get; set; } = "";
     public bool EraseOnly { get; set; } = false;

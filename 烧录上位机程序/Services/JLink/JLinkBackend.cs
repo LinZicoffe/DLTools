@@ -206,7 +206,11 @@ public sealed class JLinkBackend : IDisposable
         else if (run)
         {
             _dll.Restart(); // pylink restart() = GoEx(0, 0)
-            _log("info", "CPU running");
+            // 复位后如实确认运行状态：仍 halted 说明固件没有真正跑起来，必须让用户看见
+            if (_dll.IsCpuHalted())
+                _log("warn", "复位后 CPU 仍处于暂停态，固件可能未开始运行");
+            else
+                _log("info", "CPU running");
         }
     }
 

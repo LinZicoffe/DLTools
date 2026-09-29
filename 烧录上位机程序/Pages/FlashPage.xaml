@@ -81,7 +81,9 @@
                 <RadioButton Grid.Column="5" Content="复位暂停" GroupName="PostAction" Margin="4" x:Name="ResetHaltRadio"/>
                 <RadioButton Grid.Column="6" Content="仅烧录" GroupName="PostAction" Margin="4"/>
 
-                <CheckBox Grid.Column="7" Content="额外校验" Margin="4" x:Name="ExtraVerifyCheckBox"/>
+                <!-- 校验不再做成开关：烧录后强制读回比对，开关反而容易让失败被静默吞掉 -->
+                <TextBlock Grid.Column="7" Text="校验: 自动执行" VerticalAlignment="Center" Margin="16,4,4,4"
+                           Foreground="Gray" ToolTip="烧录完成后自动读回 Flash 与固件文件逐字节比对，不一致即报失败"/>
             </Grid>
         </GroupBox>
 

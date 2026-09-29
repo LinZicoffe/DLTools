@@ -10,7 +10,6 @@ public class ProbeParams
     public int BinStartAddr { get; init; } = 0;
     public string EraseMode { get; init; } = "sector";
     public string PostAction { get; init; } = "reset_run";
-    public bool ExtraVerify { get; init; } = false;
     public string Serial { get; init; } = "";
     public string BurnerKind { get; init; } = "jlink";
     public string RemoteAddr { get; init; } = "";

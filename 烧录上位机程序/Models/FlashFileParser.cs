@@ -641,11 +641,13 @@ public class IntelHex
     {
         _data.Clear();
         _upperAddr = 0;
+        _segmentBase = 0;
         var lines = File.ReadAllLines(path);
-        foreach (var line in lines)
+        for (int lineNo = 0; lineNo < lines.Length; lineNo++)
         {
+            var line = lines[lineNo];
             if (string.IsNullOrWhiteSpace(line) || !line.StartsWith(":")) continue;
-            ParseHexLine(line);
+            ParseHexLine(line, lineNo + 1);
         }
     }
 
@@ -757,52 +759,52 @@ public class IntelHex
         File.WriteAllBytes(path, bytes);
     }
 
-    private void ParseHexLine(string line)
+    /// <summary>扩展段地址记录（type 02）设置的段基址（值 × 16）。</summary>
+    private uint _segmentBase;
+
+    private void ParseHexLine(string line, int lineNo)
     {
-        try
+        // 格式 :LLAAAATT[DD...]CC；整行（去掉 ':'）所有字节之和 mod 256 必须为 0
+        string hex = line.Trim().Substring(1);
+        if (hex.Length < 10 || hex.Length % 2 != 0)
+            throw new FileParseError($"HEX 第 {lineNo} 行格式非法：{line}");
+
+        int sum = 0;
+        var recBytes = new byte[hex.Length / 2];
+        for (int i = 0; i < recBytes.Length; i++)
         {
-            // Remove whitespace
-            line = line.Trim();
-            if (!line.StartsWith(":")) return;
-
-            // Format: :LLAAAATT[DD...]CC
-            // LL = byte count, AAAA = 低16位地址, TT = type, DD = data, CC = checksum
-            string hex = line.Substring(1); // Remove leading ':'
-            if (hex.Length < 8) return;
-
-            int byteCount = Convert.ToInt32(hex.Substring(0, 2), 16);
-            int address = Convert.ToInt32(hex.Substring(2, 4), 16);
-            int recordType = Convert.ToInt32(hex.Substring(6, 2), 16);
-
-            switch (recordType)
-            {
-                case 0: // 数据记录：绝对地址 = type 04 设置的高 16 位 + 记录内低 16 位
-                {
-                    int dataStart = 8;
-                    int addr = (int)(_upperAddr | (uint)address);
-                    for (int i = 0; i < byteCount && dataStart + 2 + i * 2 < hex.Length; i++)
-                    {
-                        string byteStr = hex.Substring(dataStart + i * 2, 2);
-                        byte val = Convert.ToByte(byteStr, 16);
-                        _data[addr + i] = val;
-                    }
-                    break;
-                }
-                case 1: // EOF
-                    break;
-                case 4: // 扩展线性地址：数据两字节为后续记录的地址高 16 位
-                {
-                    if (hex.Length >= 12)
-                    {
-                        byte hi = Convert.ToByte(hex.Substring(8, 2), 16);
-                        byte lo = Convert.ToByte(hex.Substring(10, 2), 16);
-                        _upperAddr = (uint)((hi << 8) | lo) << 16;
-                    }
-                    break;
-                }
-                // type 02（扩展段地址，罕见格式）与其他类型忽略（见更新日志"其他"）
-            }
+            if (!byte.TryParse(hex.Substring(i * 2, 2), System.Globalization.NumberStyles.HexNumber, null, out recBytes[i]))
+                throw new FileParseError($"HEX 第 {lineNo} 行含非十六进制字符：{line}");
+            sum += recBytes[i];
         }
-        catch { }
+        if ((sum & 0xFF) != 0)
+            throw new FileParseError($"HEX 第 {lineNo} 行校验和错误（文件损坏或被截断）：{line}");
+
+        int byteCount = recBytes[0];
+        if (recBytes.Length != byteCount + 5)
+            throw new FileParseError($"HEX 第 {lineNo} 行长度与字节计数字段不符：{line}");
+
+        int address = (recBytes[1] << 8) | recBytes[2];
+        int recordType = recBytes[3];
+
+        switch (recordType)
+        {
+            case 0: // 数据记录：绝对地址 = 线性基址（type 04）+ 段基址（type 02）+ 记录内 16 位偏移
+            {
+                int addr = (int)(_upperAddr + _segmentBase + (uint)address);
+                for (int i = 0; i < byteCount; i++)
+                    _data[addr + i] = recBytes[4 + i];
+                break;
+            }
+            case 1: // EOF
+                break;
+            case 2: // 扩展段地址：数据两字节 × 16 为段基址
+                _segmentBase = (uint)((recBytes[4] << 8) | recBytes[5]) << 4;
+                break;
+            case 4: // 扩展线性地址：数据两字节为后续记录的地址高 16 位
+                _upperAddr = (uint)((recBytes[4] << 8) | recBytes[5]) << 16;
+                break;
+            // type 03/05（启动地址）等不影响数据寻址，忽略
+        }
     }
 }

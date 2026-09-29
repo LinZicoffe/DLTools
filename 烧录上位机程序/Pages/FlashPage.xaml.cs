@@ -57,7 +57,6 @@ public partial class FlashPage : BasePage
             BinStartAddr = 0,
             EraseMode = EraseChip.IsChecked == true ? JLinkBackend.EraseModeChip : JLinkBackend.EraseModeSector,
             PostAction = GetPostAction(),
-            ExtraVerify = ExtraVerifyCheckBox.IsChecked == true,
             Serial = SerialBox.Text.Trim(),
             EraseOnly = false
         };

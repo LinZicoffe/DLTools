@@ -14,29 +14,11 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- 顶部工具栏 -->
+        <!-- 顶部工具栏（应用只保留固件烧录一个功能页，无需页面导航） -->
         <DockPanel Grid.Row="0" Background="{DynamicResource SystemBaseLowColor}" MinHeight="48" LastChildFill="False">
             <TextBlock DockPanel.Dock="Left" Text="J-Link 烧录上位机"
                        FontSize="16" FontWeight="Bold"
                        VerticalAlignment="Center" Margin="8,0"/>
-
-            <!-- 页面导航 -->
-            <ListBox DockPanel.Dock="Left"
-                     ItemsSource="{Binding Pages}"
-                     SelectedItem="{Binding CurrentPage}"
-                     Background="Transparent" BorderThickness="0"
-                     VerticalAlignment="Center" Margin="16,0,0,0">
-                <ListBox.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal"/>
-                    </ItemsPanelTemplate>
-                </ListBox.ItemsPanel>
-                <ListBox.ItemTemplate>
-                    <DataTemplate>
-                        <TextBlock Text="{Binding Title}" Margin="10,6" FontSize="13"/>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
 
             <ComboBox DockPanel.Dock="Right" x:Name="LanguageCombo"
                       Width="120" Margin="8,0"

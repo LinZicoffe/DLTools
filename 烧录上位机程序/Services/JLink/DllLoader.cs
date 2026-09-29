@@ -363,6 +363,12 @@ public sealed class DllLoader : IDisposable
             GetDelegate<GoExDelegate>("JLINKARM_GoEx")(0, 0);
     }
 
+    /// <summary>CPU 是否处于暂停态（JLINKARM_IsHalted &gt; 0）。用于复位后如实上报运行状态。</summary>
+    public bool IsCpuHalted()
+    {
+        return GetDelegate<IsHaltedDelegate>("JLINKARM_IsHalted")() > 0;
+    }
+
     /// <summary>整片擦除（JLINK_EraseChip；&lt;0 失败，正值为擦除字节数）。</summary>
     public void EraseChip()
     {

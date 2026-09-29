@@ -1,5 +1,4 @@
 using System;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows;
@@ -18,22 +17,12 @@ public partial class MainWindowViewModel : ObservableObject
     public MainWindowViewModel()
     {
         _config = ConfigService.Instance;
-        Pages = new ObservableCollection<BasePage>
-        {
-            new FlashPage(),
-            new RttMonitorPage(),
-            new MemoryViewerPage(),
-            new PackManagerPage(),
-            new SettingsPage(),
-            new AboutPage()
-        };
-        CurrentPage = Pages[0];
+        // 应用只保留固件烧录功能，其他页面已按需求移除
+        CurrentPage = new FlashPage();
     }
 
     [ObservableProperty]
     private BasePage? _currentPage;
-
-    public ObservableCollection<BasePage> Pages { get; }
 
     [RelayCommand]
     private void SwitchLanguage(string lang)
