@@ -85,10 +85,14 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBox Grid.Column="0" x:Name="FilePathBox" Height="34"
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <TextBox Grid.Row="0" Grid.Column="0" x:Name="FilePathBox" Height="34"
                          VerticalContentAlignment="Center"
                          ToolTip="支持 .hex / .axf / .elf / .bin"/>
-                <Button Grid.Column="1" Style="{StaticResource SecondaryButtonStyle}" Click="BrowseFile_Click"
+                <Button Grid.Row="0" Grid.Column="1" Style="{StaticResource SecondaryButtonStyle}" Click="BrowseFile_Click"
                         MinWidth="112" Height="34" Margin="10,0,0,0">
                     <StackPanel Orientation="Horizontal">
                         <material:MaterialIcon Kind="FolderOpen" Width="15" Height="15"
@@ -96,6 +100,15 @@
                         <TextBlock Text="浏览文件" Margin="7,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
+                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,8,0,0">
+                    <TextBlock Text="Bin 起始地址:" Width="88" TextAlignment="Right" VerticalAlignment="Center"
+                               Margin="0,0,10,0" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBox x:Name="BinAddrBox" Width="150" Height="30" VerticalContentAlignment="Center"
+                             ToolTip="仅 .bin 文件需要：烧录起始地址，如 0x08000000"/>
+                    <TextBlock Text="仅 .bin 需要（hex/elf 文件自带地址信息）" VerticalAlignment="Center"
+                               Margin="8,0,0,0" FontSize="11"
+                               Foreground="{StaticResource TextSecondaryBrush}"/>
+                </StackPanel>
             </Grid>
         </GroupBox>
 

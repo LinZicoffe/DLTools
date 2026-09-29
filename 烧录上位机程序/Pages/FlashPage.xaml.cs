@@ -57,14 +57,30 @@ public partial class FlashPage : BasePage
             return;
         }
 
+        var fileFormat = Path.GetExtension(FilePathBox.Text).ToLower().TrimStart('.');
+
+        // .bin 文件不带地址信息，起始地址必须由用户提供（此前硬编码 0，
+        // 而 STM32 等 Flash 基址在 0x08000000，向 0 地址烧录必然错误）
+        int binStartAddr = 0;
+        if (fileFormat == "bin")
+        {
+            if (!TryParseAddress(BinAddrBox.Text, out binStartAddr))
+            {
+                MessageBox.Show("请填写有效的 Bin 起始地址（如 0x08000000）", "提示",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                BinAddrBox.Focus();
+                return;
+            }
+        }
+
         var p = new FlashParams
         {
             DeviceName = DeviceNameBox.Text.Trim(),
             Interface = InterfaceCombo.SelectedItem is ComboBoxItem cbi && cbi.Content.ToString() == "JTAG" ? "JTAG" : "SWD",
             SpeedKhz = int.TryParse(SpeedBox.Text, out int spd) ? spd : 4000,
             FilePath = FilePathBox.Text.Trim(),
-            FileFormat = Path.GetExtension(FilePathBox.Text).ToLower().TrimStart('.'),
-            BinStartAddr = 0,
+            FileFormat = fileFormat,
+            BinStartAddr = binStartAddr,
             EraseMode = EraseChip.IsChecked == true ? JLinkBackend.EraseModeChip : JLinkBackend.EraseModeSector,
             PostAction = GetPostAction(),
             Serial = SerialBox.Text.Trim(),
@@ -146,5 +162,20 @@ public partial class FlashPage : BasePage
         if (ResetHaltRadio.IsChecked == true) return "halt";
         if (ResetRunRadio.IsChecked == true) return "reset_run";
         return "none";
+    }
+
+    /// <summary>解析地址输入：支持 0x 前缀十六进制、裸十六进制与十进制。</summary>
+    private static bool TryParseAddress(string? text, out int value)
+    {
+        value = 0;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        text = text.Trim();
+        var style = System.Globalization.NumberStyles.Integer;
+        if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            text = text[2..];
+            style = System.Globalization.NumberStyles.HexNumber;
+        }
+        return int.TryParse(text, style, System.Globalization.CultureInfo.InvariantCulture, out value);
     }
 }
