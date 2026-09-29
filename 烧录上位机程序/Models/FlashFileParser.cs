@@ -247,50 +247,36 @@ public static class FlashFileParser
         const uint SHF_ALLOC = 0x2;
         const uint SHF_WRITE = 0x1;
         const uint SHF_EXEC = 0x4;
-        const string SHT_NOBITS = "NOBITS";
+        const uint SHT_NOBITS = 8;
 
         try
         {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
             using var reader = new BinaryReader(fs);
-            var ident = reader.ReadBytes(16);
-            if (ident[0] != 0x7F || ident[1] != (byte)'E' || ident[2] != (byte)'L' || ident[3] != (byte)'F')
-                throw new FileParseError("不是有效的 ELF 文件");
-            bool isLe = ident[5] == 1;
+            var eh = Elf32Header.Read(reader);
 
-            uint eShOff = ReadUInt32(ident, 32, isLe);
-            ushort eShEntSize = ReadUInt16(ident, 46, isLe);
-            ushort eShNum = ReadUInt16(ident, 48, isLe);
-            ushort eShStrNdx = ReadUInt16(ident, 50, isLe);
-
-            // Read section name string table
-            fs.Position = eShOff + eShStrNdx * eShEntSize;
-            var shStrHeader = reader.ReadBytes(40);
-            uint shStrAddr = ReadUInt32(shStrHeader, 16, isLe);
-            uint shStrSize = ReadUInt32(shStrHeader, 20, isLe);
-            fs.Position = shStrAddr;
-            var strTable = reader.ReadBytes((int)shStrSize);
+            // 节名字符串表（e_shstrndx 指向的节）：sh_offset@16 定位、sh_size@20 计数
+            fs.Position = eh.ShOff + eh.ShStrNdx * eh.ShEntSize;
+            var shStr = reader.ReadBytes(40);
+            fs.Position = ReadUInt32(shStr, 16, eh.IsLe);
+            var strTable = reader.ReadBytes((int)ReadUInt32(shStr, 20, eh.IsLe));
 
             var sections = new List<Section>();
-            for (int i = 0; i < eShNum; i++)
+            for (int i = 0; i < eh.ShNum; i++)
             {
-                fs.Position = eShOff + i * eShEntSize;
+                fs.Position = eh.ShOff + i * eh.ShEntSize;
                 var sh = reader.ReadBytes(40);
-                uint shName = ReadUInt32(sh, 0, isLe);
-                uint shType = ReadUInt32(sh, 4, isLe);
-                uint shFlags = ReadUInt32(sh, 8, isLe);
-                uint shAddr = ReadUInt32(sh, 12, isLe);
-                uint shSize = ReadUInt32(sh, 16, isLe);
+                uint shName = ReadUInt32(sh, 0, eh.IsLe);
+                uint shType = ReadUInt32(sh, 4, eh.IsLe);
+                uint shFlags = ReadUInt32(sh, 8, eh.IsLe);
+                uint shAddr = ReadUInt32(sh, 12, eh.IsLe);
+                uint shSize = ReadUInt32(sh, 20, eh.IsLe); // sh_size@20（原 @16 误读 sh_offset）
 
                 if ((shFlags & SHF_ALLOC) == 0) continue;
 
-                // Get section name
-                int nameOff = (int)shName;
-                int nameEnd = Array.IndexOf(strTable, (byte)0, nameOff);
-                if (nameEnd < 0) nameEnd = strTable.Length;
-                string name = System.Text.Encoding.ASCII.GetString(strTable, nameOff, nameEnd - nameOff);
+                string name = ReadAsciiName(strTable, (int)shName);
 
-                bool isNobits = shType == 8; // SHT_NOBITS
+                bool isNobits = shType == SHT_NOBITS;
                 string rwx = "R" + ((shFlags & SHF_WRITE) != 0 ? "W" : "-") + ((shFlags & SHF_EXEC) != 0 ? "X" : "-");
                 if (isNobits) rwx += " (nobits)";
 
@@ -300,7 +286,7 @@ public static class FlashFileParser
                     Addr = (int)shAddr,
                     Size = (int)shSize,
                     Flags = rwx,
-                    Align = (int)ReadUInt32(sh, 28, isLe)
+                    Align = (int)ReadUInt32(sh, 32, eh.IsLe) // sh_addralign@32（原 @28 误读 sh_info）
                 });
             }
 
@@ -322,30 +308,16 @@ public static class FlashFileParser
         {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
             using var reader = new BinaryReader(fs);
-            var ident = reader.ReadBytes(16);
-            bool isLe = ident[5] == 1;
-
-            uint eShOff = ReadUInt32(ident, 32, isLe);
-            ushort eShEntSize = ReadUInt16(ident, 46, isLe);
-            ushort eShNum = ReadUInt16(ident, 48, isLe);
-            ushort eShStrNdx = ReadUInt16(ident, 50, isLe);
-
-            // Read section name string table
-            fs.Position = eShOff + eShStrNdx * eShEntSize;
-            var shStrHeader = reader.ReadBytes(40);
-            uint shStrAddr = ReadUInt32(shStrHeader, 16, isLe);
-            uint shStrSize = ReadUInt32(shStrHeader, 20, isLe);
-            fs.Position = shStrAddr;
-            var strTable = reader.ReadBytes((int)shStrSize);
+            var eh = Elf32Header.Read(reader);
 
             int text = 0, data = 0, bss = 0;
-            for (int i = 0; i < eShNum; i++)
+            for (int i = 0; i < eh.ShNum; i++)
             {
-                fs.Position = eShOff + i * eShEntSize;
+                fs.Position = eh.ShOff + i * eh.ShEntSize;
                 var sh = reader.ReadBytes(40);
-                uint shFlags = ReadUInt32(sh, 8, isLe);
-                uint shType = ReadUInt32(sh, 4, isLe);
-                uint shSize = ReadUInt32(sh, 16, isLe);
+                uint shFlags = ReadUInt32(sh, 8, eh.IsLe);
+                uint shType = ReadUInt32(sh, 4, eh.IsLe);
+                uint shSize = ReadUInt32(sh, 20, eh.IsLe); // sh_size@20（原 @16 误读 sh_offset）
 
                 if ((shFlags & SHF_ALLOC) == 0) continue;
 
@@ -376,48 +348,45 @@ public static class FlashFileParser
         {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
             using var reader = new BinaryReader(fs);
-            var ident = reader.ReadBytes(16);
-            bool isLe = ident[5] == 1;
+            var eh = Elf32Header.Read(reader);
 
-            uint eEntry = ReadUInt32(ident, 24, isLe);
-            uint ePhOff = ReadUInt32(ident, 28, isLe);
-            ushort ePhEntSize = ReadUInt16(ident, 42, isLe);
-            ushort ePhNum = ReadUInt16(ident, 44, isLe);
-
-            // Find lowest addr LOAD segment
-            int lowestAddr = int.MaxValue;
-            var loadSegs = new List<(int Addr, int Filesz)>();
-            for (int i = 0; i < ePhNum; i++)
-            {
-                fs.Position = ePhOff + i * ePhEntSize;
-                var ph = reader.ReadBytes(32);
-                uint pType = ReadUInt32(ph, 0, isLe);
-                if (pType != 1) continue;
-                uint pPaddr = ReadUInt32(ph, 12, isLe);
-                uint pFilesz = ReadUInt32(ph, 16, isLe);
-                if (pFilesz >= 8)
-                    loadSegs.Add((checked((int)pPaddr), checked((int)pFilesz)));
-            }
-
+            // 最低地址 LOAD 段起始的 8 字节即向量表（初始 SP + 复位向量）。
+            // 原实现从文件头读，取到的是 ELF 魔数而非向量表。
             int? initialSp = null;
             int? resetHandler = null;
-            if (loadSegs.Count > 0)
+            long lowestFileOff = -1;
+            int lowestAddr = int.MaxValue;
+            for (int i = 0; i < eh.PhNum; i++)
             {
-                var seg = loadSegs.MinBy(s => s.Addr);
-                fs.Position = 0;
-                var allBytes = reader.ReadBytes((int)new System.IO.FileInfo(path).Length);
-                // The segment data starts at the file offset of the segment
-                // For simplicity, read from the start of the file (typical for bootloaders)
-                if (allBytes.Length >= 8)
+                fs.Position = eh.PhOff + i * eh.PhEntSize;
+                var ph = reader.ReadBytes(32);
+                if (ReadUInt32(ph, 0, eh.IsLe) != 1) continue; // PT_LOAD
+                uint pPaddr = ReadUInt32(ph, 12, eh.IsLe);
+                uint pOffset = ReadUInt32(ph, 4, eh.IsLe);
+                uint pFilesz = ReadUInt32(ph, 16, eh.IsLe);
+                if (pFilesz < 8) continue;
+                int paddr = checked((int)pPaddr);
+                if (paddr < lowestAddr)
                 {
-                    initialSp = BitConverter.ToInt32(allBytes, 0);
-                    resetHandler = BitConverter.ToInt32(allBytes, 4) & ~1;
+                    lowestAddr = paddr;
+                    lowestFileOff = pOffset;
+                }
+            }
+
+            if (lowestFileOff >= 0)
+            {
+                fs.Position = lowestFileOff;
+                var vector = reader.ReadBytes(8);
+                if (vector.Length == 8)
+                {
+                    initialSp = BitConverter.ToInt32(vector, 0);
+                    resetHandler = BitConverter.ToInt32(vector, 4) & ~1;
                 }
             }
 
             return new ElfMeta
             {
-                Entry = (int)eEntry,
+                Entry = (int)eh.Entry,
                 InitialSp = initialSp,
                 ResetHandler = resetHandler
             };
@@ -432,90 +401,57 @@ public static class FlashFileParser
         {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
             using var reader = new BinaryReader(fs);
-            var ident = reader.ReadBytes(16);
-            if (ident[0] != 0x7F || ident[1] != (byte)'E' || ident[2] != (byte)'L' || ident[3] != (byte)'F')
-                throw new FileParseError("不是有效的 ELF 文件");
-            bool isLe = ident[5] == 1;
-            bool is64 = ident[4] == 2;
-            if (is64) throw new FileParseError("不支持 ELF64");
+            var eh = Elf32Header.Read(reader);
 
-            uint eShOff = ReadUInt32(ident, 32, isLe);
-            ushort eShEntSize = ReadUInt16(ident, 46, isLe);
-            ushort eShNum = ReadUInt16(ident, 48, isLe);
-            ushort eShStrNdx = ReadUInt16(ident, 50, isLe);
+            // 节名字符串表（e_shstrndx 指向的节）：sh_offset@16 定位、sh_size@20 计数
+            fs.Position = eh.ShOff + eh.ShStrNdx * eh.ShEntSize;
+            var shStr = reader.ReadBytes(40);
+            fs.Position = ReadUInt32(shStr, 16, eh.IsLe);
+            var shStrTable = reader.ReadBytes((int)ReadUInt32(shStr, 20, eh.IsLe));
 
-            // Find .symtab section
-            int symAddr = -1, symSize = 0, symLink = 0, symInfo = 0;
-            int strTabAddr = -1, strTabSize = 0;
-
-            for (int i = 0; i < eShNum; i++)
+            // .symtab / .strtab 是非 ALLOC 节，内容须按 sh_offset（@16）定位、
+            // sh_size（@20）计数；原实现误用 sh_addr 与 sh_offset。
+            long symOff = -1, symSize = 0, strOff = -1, strSize = 0;
+            for (int i = 0; i < eh.ShNum; i++)
             {
-                fs.Position = eShOff + i * eShEntSize;
+                fs.Position = eh.ShOff + i * eh.ShEntSize;
                 var sh = reader.ReadBytes(40);
-                uint shName = ReadUInt32(sh, 0, isLe);
-                uint shType = ReadUInt32(sh, 4, isLe);
-                uint shFlags = ReadUInt32(sh, 8, isLe);
-                uint shAddr = ReadUInt32(sh, 12, isLe);
-                uint shSize = ReadUInt32(sh, 16, isLe);
-                uint shLink = ReadUInt32(sh, 20, isLe);
-                uint shInfo = ReadUInt32(sh, 24, isLe);
-                uint shEntSize = ReadUInt32(sh, 36, isLe);
-
-                // Get name
-                fs.Position = eShOff + eShStrNdx * eShEntSize;
-                var shStrHeader = reader.ReadBytes(40);
-                uint shStrBase = ReadUInt32(shStrHeader, 16, isLe);
-                fs.Position = shStrBase;
-                var shStrTable = reader.ReadBytes((int)ReadUInt32(shStrHeader, 20, isLe));
-                int nameOff = (int)shName;
-                int nameEnd = Array.IndexOf(shStrTable, (byte)0, nameOff);
-                if (nameEnd < 0) nameEnd = shStrTable.Length;
-                string name = System.Text.Encoding.ASCII.GetString(shStrTable, nameOff, nameEnd - nameOff);
+                string name = ReadAsciiName(shStrTable, (int)ReadUInt32(sh, 0, eh.IsLe));
 
                 if (name == ".symtab")
                 {
-                    symAddr = (int)shAddr;
-                    symSize = (int)shSize;
-                    symLink = (int)shLink;
-                    symInfo = (int)shInfo;
+                    symOff = ReadUInt32(sh, 16, eh.IsLe);
+                    symSize = ReadUInt32(sh, 20, eh.IsLe);
                 }
                 else if (name == ".strtab")
                 {
-                    strTabAddr = (int)shAddr;
-                    strTabSize = (int)shSize;
+                    strOff = ReadUInt32(sh, 16, eh.IsLe);
+                    strSize = ReadUInt32(sh, 20, eh.IsLe);
                 }
             }
 
-            if (symAddr < 0) return new List<Symbol>();
+            if (symOff < 0 || strOff < 0) return new List<Symbol>();
 
-            if (strTabAddr < 0) return new List<Symbol>();
-            fs.Position = strTabAddr;
-            var strTable = reader.ReadBytes(strTabSize);
+            fs.Position = strOff;
+            var strTable = reader.ReadBytes((int)strSize);
 
             int symEntSize = 16; // ELF32 symbol size
-            int numSymbols = symSize / symEntSize;
+            int numSymbols = (int)(symSize / symEntSize);
             var symbols = new List<Symbol>();
 
-            fs.Position = symAddr;
+            fs.Position = symOff;
             for (int i = 0; i < numSymbols; i++)
             {
                 var sym = reader.ReadBytes(16);
-                int stName = ReadInt32(sym, 0, isLe);
-                uint stValue = ReadUInt32(sym, 4, isLe);
-                uint stSize = ReadUInt32(sym, 8, isLe);
+                int stName = ReadInt32(sym, 0, eh.IsLe);
+                uint stValue = ReadUInt32(sym, 4, eh.IsLe);
+                uint stSize = ReadUInt32(sym, 8, eh.IsLe);
                 byte stInfo = sym[12];
                 byte stOther = sym[13];
-                ushort stShndx = ReadUInt16(sym, 14, isLe);
+                ushort stShndx = ReadUInt16(sym, 14, eh.IsLe);
 
                 // Get symbol name from strtab
-                string symName = "";
-                if (stName >= 0 && stName < strTabSize)
-                {
-                    int nameOff = stName;
-                    int nameEnd = Array.IndexOf(strTable, (byte)0, nameOff);
-                    if (nameEnd < 0) nameEnd = strTabSize;
-                    symName = System.Text.Encoding.ASCII.GetString(strTable, nameOff, nameEnd - nameOff);
-                }
+                string symName = ReadAsciiName(strTable, stName);
 
                 if (string.IsNullOrEmpty(symName)) continue;
 
@@ -559,6 +495,55 @@ public static class FlashFileParser
 
     #region ELF helper methods
 
+    /// <summary>
+    /// ELF32 文件头（52 字节）。原先各函数只读 16 字节 e_ident 却按 52 字节
+    /// 头的偏移取值，必然数组越界；统一完整读取后按规范偏移解析。
+    /// </summary>
+    private readonly struct Elf32Header
+    {
+        public readonly bool IsLe;
+        public readonly uint Entry;        // e_entry     @24
+        public readonly uint PhOff;        // e_phoff     @28
+        public readonly uint ShOff;        // e_shoff     @32
+        public readonly ushort PhEntSize;  // e_phentsize @42
+        public readonly ushort PhNum;      // e_phnum     @44
+        public readonly ushort ShEntSize;  // e_shentsize @46
+        public readonly ushort ShNum;      // e_shnum     @48
+        public readonly ushort ShStrNdx;   // e_shstrndx  @50
+
+        private Elf32Header(byte[] h)
+        {
+            IsLe = h[5] == 1;
+            Entry = ReadUInt32(h, 24, IsLe);
+            PhOff = ReadUInt32(h, 28, IsLe);
+            ShOff = ReadUInt32(h, 32, IsLe);
+            PhEntSize = ReadUInt16(h, 42, IsLe);
+            PhNum = ReadUInt16(h, 44, IsLe);
+            ShEntSize = ReadUInt16(h, 46, IsLe);
+            ShNum = ReadUInt16(h, 48, IsLe);
+            ShStrNdx = ReadUInt16(h, 50, IsLe);
+        }
+
+        public static Elf32Header Read(BinaryReader reader)
+        {
+            var h = reader.ReadBytes(52);
+            if (h.Length < 52 || h[0] != 0x7F || h[1] != (byte)'E' || h[2] != (byte)'L' || h[3] != (byte)'F')
+                throw new FileParseError("不是有效的 ELF 文件");
+            if (h[4] == 2)
+                throw new FileParseError("不支持 ELF64，请使用 ELF32");
+            return new Elf32Header(h);
+        }
+    }
+
+    /// <summary>从字符串表中取 NUL 结尾 ASCII 名，偏移越界返回空串。</summary>
+    private static string ReadAsciiName(byte[] table, int offset)
+    {
+        if (offset < 0 || offset >= table.Length) return "";
+        int end = Array.IndexOf(table, (byte)0, offset);
+        if (end < 0) end = table.Length;
+        return System.Text.Encoding.ASCII.GetString(table, offset, end - offset);
+    }
+
     private static ushort ReadUInt16(byte[] data, int offset, bool isLe)
     {
         if (isLe)
@@ -592,12 +577,7 @@ public static class FlashFileParser
         {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
             using var reader = new BinaryReader(fs);
-            var ident = reader.ReadBytes(16);
-            bool isLe = ident[5] == 1;
-
-            uint ePhOff = ReadUInt32(ident, 28, isLe);
-            ushort ePhEntSize = ReadUInt16(ident, 42, isLe);
-            ushort ePhNum = ReadUInt16(ident, 44, isLe);
+            var eh = Elf32Header.Read(reader);
 
             // Read all file data
             fs.Position = 0;
@@ -605,15 +585,15 @@ public static class FlashFileParser
 
             // Parse program headers
             var loadSegs = new List<(int Addr, int FileOff, int Filesz)>();
-            for (int i = 0; i < ePhNum; i++)
+            for (int i = 0; i < eh.PhNum; i++)
             {
-                fs.Position = ePhOff + i * ePhEntSize;
+                fs.Position = eh.PhOff + i * eh.PhEntSize;
                 var ph = reader.ReadBytes(32);
-                uint pType = ReadUInt32(ph, 0, isLe);
+                uint pType = ReadUInt32(ph, 0, eh.IsLe);
                 if (pType != 1) continue;
-                uint pPaddr = ReadUInt32(ph, 12, isLe);
-                uint pFilesz = ReadUInt32(ph, 16, isLe);
-                uint pOffset = ReadUInt32(ph, 4, isLe);
+                uint pPaddr = ReadUInt32(ph, 12, eh.IsLe);
+                uint pFilesz = ReadUInt32(ph, 16, eh.IsLe);
+                uint pOffset = ReadUInt32(ph, 4, eh.IsLe);
                 if (pFilesz > 0)
                     loadSegs.Add((checked((int)pPaddr), checked((int)pOffset), checked((int)pFilesz)));
             }
