@@ -20,7 +20,7 @@ public class JLinkDllException : Exception
 /// 必须在加载前通过 SetDllDirectory 指定搜索路径。
 ///
 /// API 映射依据（与 pylink-square 1.6.0 对 DLL 的调用逐项对齐，
-/// 导出名全部经 V8.14 真实导出表核验，清单见 docs/JLink_DLL_exports.txt）：
+/// 导出名全部经 V9.76 真实导出表核验，清单见 docs/JLink_DLL_exports.txt）：
 /// - 打开：JLINKARM_EMU_SelectByUSBSN / JLINKARM_SelectIP / JLINKARM_SelectUSB
 ///         + JLINKARM_OpenEx（返回错误字符串指针，NULL 表示成功）
 /// - 设备：JLINKARM_DEVICE_GetIndex 校验 + JLINKARM_ExecCommand("Device = &lt;名&gt;")
@@ -39,7 +39,7 @@ public sealed class DllLoader : IDisposable
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool SetDllDirectory(string lpPathName);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern IntPtr LoadLibrary(string lpFileName);
 
     [DllImport("kernel32.dll", SetLastError = true)]

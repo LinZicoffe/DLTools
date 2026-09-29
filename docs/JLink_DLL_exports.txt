@@ -1,3 +1,6 @@
+# JLink_x64.dll PE 导出表存档（637 项，按名称排序）
+# 来源：C:\iar\ewarm-9.60.4\arm\bin\JLink_x64.dll（FileVersion 9.76，SEGGER J-Link interface DLL）
+# 生成：2026-09-29，PowerShell 解析 PE 导出目录
 JLINK_AddMirrorArea
 JLINK_AddMirrorAreaEx
 JLINK_BeginDownload

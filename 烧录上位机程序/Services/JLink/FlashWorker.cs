@@ -64,9 +64,10 @@ public partial class FlashWorker : ObservableObject
 
     public void StopFlash()
     {
+        // 只请求取消；IsBusy 由任务 finally 复位，完成事件由 catch(OperationCanceledException) 统一上报。
+        // 若在此立即放开 IsBusy，原生烧录任务未退出时就能再启动第二个任务并发进入同一 DLL（非线程安全）。
         _cts?.Cancel();
-        IsBusy = false;
-        StageText = "已取消";
+        StageText = "正在取消...";
     }
 
     #endregion
@@ -106,6 +107,7 @@ public partial class FlashWorker : ObservableObject
             SetStage("连接中...");
             backend.Connect(probeParams);
             AddLog("[info] 目标已连接: " + p.DeviceName);
+            ct.ThrowIfCancellationRequested();
 
             if (p.EraseOnly)
             {
@@ -126,12 +128,11 @@ public partial class FlashWorker : ObservableObject
                 backend.Erase(JLinkBackend.EraseModeChip);
                 AddLog("[info] 芯片擦除完成");
             }
+            ct.ThrowIfCancellationRequested(); // 整片擦除（不可中断）完成后立即响应取消
 
             // Program
             FlashStageChanged?.Invoke("program");
             SetStage("烧录中...");
-            int totalBytes = FlashFileParser.ParseFile(p.FilePath, p.BinStartAddr).TotalBytes;
-            if (totalBytes == 0) totalBytes = 1;
 
             void OnProgress(int current, int total)
             {
@@ -139,7 +140,7 @@ public partial class FlashWorker : ObservableObject
                 ProgressValue = current;
             }
 
-            backend.Program(p.FilePath, p.FileFormat, p.BinStartAddr, OnProgress);
+            backend.Program(p.FilePath, p.FileFormat, p.BinStartAddr, OnProgress, ct);
             AddLog("[info] 烧录完成");
 
             // Verify
@@ -147,13 +148,14 @@ public partial class FlashWorker : ObservableObject
             {
                 FlashStageChanged?.Invoke("verify");
                 SetStage("校验中...");
-                backend.Verify(p.FilePath, p.FileFormat, p.BinStartAddr);
+                backend.Verify(p.FilePath, p.FileFormat, p.BinStartAddr, ct);
                 AddLog("[info] 校验通过");
             }
 
             // Reset
             if (p.PostAction != JLinkBackend.PostActionNone)
             {
+                ct.ThrowIfCancellationRequested(); // 复位前响应取消（烧录已完整，跳过复位）
                 FlashStageChanged?.Invoke("reset");
                 SetStage("复位中...");
                 bool halt = p.PostAction == JLinkBackend.PostActionHalt;
@@ -170,6 +172,7 @@ public partial class FlashWorker : ObservableObject
         }
         catch (OperationCanceledException)
         {
+            SetStage("已取消");
             AddLog("[warn] 烧录已取消");
             backend?.Close();
             FlashFinished?.Invoke(false, "已取消");

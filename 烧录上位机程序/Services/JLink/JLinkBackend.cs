@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Threading;
 using 烧录上位机程序.Models;
 
 namespace 烧录上位机程序.Services.JLink;
@@ -84,12 +85,14 @@ public sealed class JLinkBackend : IDisposable
             _log("info", $"J-Link SN: {ConnectedSerial}");
         }
 
+        // 仿真器已打开：此后任一步失败，catch 里的 backend.Close() 都能正确关掉句柄
+        _connected = true;
+
         // SWD / JTAG 二选一（pylink set_tif：不可 OR 起来）
         int tif = p.Interface == "SWD" ? JLINK_IF_SWD : JLINK_IF_JTAG;
         _dll.SetTif(tif);
         _dll.SetSpeed(p.SpeedKhz);
         _dll.Connect(p.DeviceName);
-        _connected = true;
         _log("info", $"Target connected: {p.DeviceName}");
     }
 
@@ -121,7 +124,7 @@ public sealed class JLinkBackend : IDisposable
         catch (JLinkDllException ex) { _log("warn", $"halt: {ex.Message}"); }
     }
 
-    public void Program(string filePath, string fileFormat, int binStartAddr, Action<int, int> onProgress)
+    public void Program(string filePath, string fileFormat, int binStartAddr, Action<int, int> onProgress, CancellationToken ct = default)
     {
         if (!_connected)
             throw new InvalidOperationException("未连接");
@@ -137,6 +140,8 @@ public sealed class JLinkBackend : IDisposable
 
         foreach (var (start, endExclusive) in segments)
         {
+            ct.ThrowIfCancellationRequested(); // 段边界响应取消，避免 DLL 并发访问
+
             int len = endExclusive - start;
             var data = ih.ToBinArray(start, endExclusive);
             if (data.Length == 0) continue;
@@ -157,7 +162,7 @@ public sealed class JLinkBackend : IDisposable
         }
     }
 
-    public void Verify(string filePath, string fileFormat, int binStartAddr)
+    public void Verify(string filePath, string fileFormat, int binStartAddr, CancellationToken ct = default)
     {
         if (!_connected)
             throw new InvalidOperationException("未连接");
@@ -172,9 +177,13 @@ public sealed class JLinkBackend : IDisposable
             // 与 Python _verify_range 一致：4096 字节分块读取比对
             for (int off = 0; off < len; off += VerifyChunk)
             {
+                ct.ThrowIfCancellationRequested(); // 块边界响应取消
+
                 int n = Math.Min(VerifyChunk, len - off);
                 var chunk = new byte[n];
-                _dll.ReadMem(start + off, chunk);
+                int read = _dll.ReadMem(start + off, chunk);
+                if (read < n)
+                    throw new InvalidOperationException($"回读不完整: {read}/{n} 字节 @ 0x{start + off:X8}");
                 for (int i = 0; i < n; i++)
                 {
                     if (chunk[i] != expected[off + i])

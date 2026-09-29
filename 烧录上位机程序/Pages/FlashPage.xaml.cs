@@ -69,9 +69,10 @@ public partial class FlashPage : BasePage
 
     private void StopFlash_Click(object sender, RoutedEventArgs e)
     {
-        _worker?.StopFlash();
-        StartBtn.IsEnabled = true;
+        // 只请求取消并禁用自身；StartBtn 由 OnFlashFinished 统一恢复，
+        // 避免原生烧录任务未退出时再次开始造成并发访问 DLL
         StopBtn.IsEnabled = false;
+        _worker?.StopFlash();
     }
 
     private void OnFlashLog(string level, string msg)

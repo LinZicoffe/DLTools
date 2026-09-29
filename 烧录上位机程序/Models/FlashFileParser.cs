@@ -301,7 +301,6 @@ public static class FlashFileParser
     {
         const uint SHF_ALLOC = 0x2;
         const uint SHF_WRITE = 0x1;
-        const uint SHF_EXEC = 0x4;
         const uint SHT_NOBITS = 8;
 
         try
