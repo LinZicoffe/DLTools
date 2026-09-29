@@ -4,7 +4,7 @@ using 烧录上位机程序.Services;
 
 namespace 烧录上位机程序;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 {
     public MainWindow()
     {

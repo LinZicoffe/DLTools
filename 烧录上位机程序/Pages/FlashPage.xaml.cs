@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using 烧录上位机程序.Services.JLink;
 
 namespace 烧录上位机程序.Pages;
@@ -95,6 +96,8 @@ public partial class FlashPage : BasePage
     {
         Dispatcher.Invoke(() =>
         {
+            // 过程中状态回到中性色；成功/失败的终态色由 OnFlashFinished 决定
+            StageText.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x1B, 0x1B));
             StageText.Text = stage switch
             {
                 "connect" => "连接中...",
@@ -114,6 +117,9 @@ public partial class FlashPage : BasePage
         {
             StartBtn.IsEnabled = true;
             StopBtn.IsEnabled = false;
+            StageText.Text = success ? "完成" : "失败";
+            StageText.Foreground = new SolidColorBrush(
+                success ? Color.FromRgb(0x0E, 0x70, 0x0E) : Color.FromRgb(0xC5, 0x0F, 0x1F));
             if (success)
             {
                 LogBox.AppendText($"\n*** 烧录成功: {summary} ***\n");
@@ -122,6 +128,7 @@ public partial class FlashPage : BasePage
             {
                 LogBox.AppendText($"\n*** 烧录失败: {summary} ***\n");
             }
+            LogBox.ScrollToEnd();
         });
     }
 
