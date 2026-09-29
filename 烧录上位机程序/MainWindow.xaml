@@ -4,10 +4,11 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:烧录上位机程序"
+        xmlns:i18n="clr-namespace:烧录上位机程序.Services"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:material="clr-namespace:Material.Icons.WPF;assembly=Material.Icons.WPF"
         mc:Ignorable="d"
-        Title="J-Link 烧录上位机"
+        Title="{i18n:Loc 'J-Link 烧录上位机'}"
         Width="1280" Height="800"
         MinWidth="520" MinHeight="560"
         WindowStartupLocation="CenterScreen">
@@ -33,9 +34,9 @@
                                            Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Border>
                 <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                    <TextBlock Text="J-Link 烧录上位机" FontSize="16" FontWeight="Bold"
+                    <TextBlock Text="{i18n:Loc 'J-Link 烧录上位机'}" FontSize="16" FontWeight="Bold"
                                Foreground="{StaticResource TextPrimaryBrush}"/>
-                    <TextBlock Text="固件烧录工具 · 基于 SEGGER J-Link DLL" FontSize="11"
+                    <TextBlock Text="{i18n:Loc '固件烧录工具 · 基于 SEGGER J-Link DLL'}" FontSize="11"
                                Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2,0,0"/>
                 </StackPanel>
             </StackPanel>

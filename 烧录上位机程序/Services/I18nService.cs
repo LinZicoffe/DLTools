@@ -28,6 +28,9 @@ public static class I18nService
     public static string CurrentLang => _currentLang;
     public static IReadOnlyList<string> SupportedLanguages => SupportedLangs;
 
+    /// <summary>语言切换完成（含启动首次加载）后触发；UI 借此刷新已绑定的本地化文本。</summary>
+    public static event Action? LanguageChanged;
+
     public static string GetString(string key)
     {
         lock (_lock)
@@ -58,6 +61,7 @@ public static class I18nService
             catch { }
             _translations ??= new Dictionary<string, string>();
         }
+        LanguageChanged?.Invoke();
     }
 
     public static void SwitchLanguage(string lang)

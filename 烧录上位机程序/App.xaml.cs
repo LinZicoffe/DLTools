@@ -15,8 +15,8 @@ public partial class App : Application
         DispatcherUnhandledException += (s, args) =>
         {
             try { LoggerService.Error($"UI 线程未处理异常: {args.Exception}"); } catch { }
-            MessageBox.Show($"发生未处理的错误：\n\n{args.Exception.Message}\n\n详情已写入日志。",
-                "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show($"{I18nService.GetString("发生未处理的错误：")}\n\n{args.Exception.Message}\n\n{I18nService.GetString("详情已写入日志")}",
+                I18nService.GetString("错误"), MessageBoxButton.OK, MessageBoxImage.Error);
             args.Handled = true;
         };
         AppDomain.CurrentDomain.UnhandledException += (s, args) =>
@@ -41,8 +41,8 @@ public partial class App : Application
         {
             LoggerService.Error($"加载 JLink_x64.dll 失败: {ex.Message}");
             MessageBox.Show(
-                $"加载 JLink_x64.dll 失败：\n\n{ex.Message}\n\n请确认已安装 SEGGER J-Link 驱动。",
-                "启动失败",
+                $"{I18nService.GetString("加载 JLink_x64.dll 失败")}：\n\n{ex.Message}\n\n{I18nService.GetString("请确认已安装 SEGGER J-Link 驱动。")}",
+                I18nService.GetString("启动失败"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             Current.Shutdown(1);

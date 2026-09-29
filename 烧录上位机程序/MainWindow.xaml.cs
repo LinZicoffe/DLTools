@@ -9,6 +9,9 @@ namespace 烧录上位机程序;
 public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 {
     private bool _forceClose;
+    // 语言下拉框程序化赋值期间为 true：此时 SelectionChanged 属初始化回声，
+    // 不应再触发 LoadLanguage/写配置（否则每次启动都重写 user_prefs.json）
+    private bool _suppressLanguageEvent;
 
     public MainWindow()
     {
@@ -33,8 +36,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             // 芯片可能停在半擦除/半写入状态且 J-Link 会话不会被正常关闭
             e.Cancel = true;
             var answer = MessageBox.Show(this,
-                "烧录正在进行中，强制退出可能导致芯片停留在半擦除/半写入状态。\n确定要停止烧录并退出吗？",
-                "确认退出", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                I18nService.GetString("烧录进行中，强制退出可能使芯片停留在半擦除/半写入状态") + "\n" +
+                I18nService.GetString("确定要停止烧录并退出吗？"),
+                I18nService.GetString("确认退出"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (answer != MessageBoxResult.Yes) return;
 
             try
@@ -55,6 +59,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
     private void LanguageCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_suppressLanguageEvent) return;
         if (sender is ComboBox comboBox && comboBox.SelectedItem is ComboBoxItem item)
         {
             var lang = item.Tag?.ToString() ?? "zh_CN";
@@ -67,13 +72,21 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (LanguageCombo is ComboBox combo)
         {
-            foreach (ComboBoxItem item in combo.Items)
+            _suppressLanguageEvent = true;
+            try
             {
-                if (item.Tag?.ToString() == lang)
+                foreach (ComboBoxItem item in combo.Items)
                 {
-                    item.IsSelected = true;
-                    break;
+                    if (item.Tag?.ToString() == lang)
+                    {
+                        item.IsSelected = true;
+                        break;
+                    }
                 }
+            }
+            finally
+            {
+                _suppressLanguageEvent = false;
             }
         }
     }

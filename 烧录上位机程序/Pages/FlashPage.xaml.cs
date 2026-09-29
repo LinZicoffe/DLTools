@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using 烧录上位机程序.Services;
 using 烧录上位机程序.Services.JLink;
 
 namespace 烧录上位机程序.Pages;
@@ -19,7 +20,6 @@ public partial class FlashPage : BasePage
         _worker.FlashProgress += OnFlashProgress;
         _worker.FlashStageChanged += OnFlashStageChanged;
         _worker.FlashFinished += OnFlashFinished;
-        DataContext = _worker;
     }
 
     /// <summary>烧录是否进行中（供主窗口关窗确认流程使用）。</summary>
@@ -48,12 +48,14 @@ public partial class FlashPage : BasePage
     {
         if (string.IsNullOrWhiteSpace(DeviceNameBox.Text))
         {
-            MessageBox.Show("请填写目标设备名（如 STM32H750VB）", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(I18nService.GetString("请填写目标设备名（如 STM32H750VB）"),
+                I18nService.GetString("提示"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         if (string.IsNullOrWhiteSpace(FilePathBox.Text) || !File.Exists(FilePathBox.Text))
         {
-            MessageBox.Show("请先选择有效的 .axf/.elf/.hex/.bin 文件", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(I18nService.GetString("请先选择有效的 .axf/.elf/.hex/.bin 文件"),
+                I18nService.GetString("提示"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -66,8 +68,8 @@ public partial class FlashPage : BasePage
         {
             if (!TryParseAddress(BinAddrBox.Text, out binStartAddr))
             {
-                MessageBox.Show("请填写有效的 Bin 起始地址（如 0x08000000）", "提示",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(I18nService.GetString("请填写有效的 Bin 起始地址（如 0x08000000）"),
+                    I18nService.GetString("提示"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 BinAddrBox.Focus();
                 return;
             }
@@ -125,12 +127,13 @@ public partial class FlashPage : BasePage
             StageText.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x1B, 0x1B));
             StageText.Text = stage switch
             {
-                "connect" => "连接中...",
-                "erase" => "擦除中...",
-                "program" => "烧录中...",
-                "verify" => "校验中...",
-                "reset" => "复位中...",
-                "disconnect" => "断开中...",
+                "connect" => I18nService.GetString("连接中…"),
+                "erase" => I18nService.GetString("擦除中…"),
+                "program" => I18nService.GetString("烧录中…"),
+                "verify" => I18nService.GetString("校验中…"),
+                "reset" => I18nService.GetString("复位中…"),
+                "disconnect" => I18nService.GetString("断开中…"),
+                "cancel" => I18nService.GetString("正在取消…"),
                 _ => stage
             };
         });
@@ -142,17 +145,10 @@ public partial class FlashPage : BasePage
         {
             StartBtn.IsEnabled = true;
             StopBtn.IsEnabled = false;
-            StageText.Text = success ? "完成" : "失败";
+            StageText.Text = success ? I18nService.GetString("完成") : I18nService.GetString("失败");
             StageText.Foreground = new SolidColorBrush(
                 success ? Color.FromRgb(0x0E, 0x70, 0x0E) : Color.FromRgb(0xC5, 0x0F, 0x1F));
-            if (success)
-            {
-                LogBox.AppendText($"\n*** 烧录成功: {summary} ***\n");
-            }
-            else
-            {
-                LogBox.AppendText($"\n*** 烧录失败: {summary} ***\n");
-            }
+            LogBox.AppendText($"\n{string.Format(I18nService.GetString(success ? "*** 烧录成功: {0} ***" : "*** 烧录失败: {0} ***"), summary)}\n");
             LogBox.ScrollToEnd();
         });
     }
