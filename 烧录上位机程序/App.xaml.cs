@@ -37,4 +37,11 @@ public partial class App : Application
         var mainWindow = new MainWindow();
         mainWindow.Show();
     }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        // 配置写入有 200ms 防抖，退出前强制落盘避免最后一次修改丢失
+        ConfigService.Flush();
+        base.OnExit(e);
+    }
 }

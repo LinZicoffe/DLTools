@@ -91,8 +91,8 @@ public sealed class ConfigService
         lock (_lock)
         {
             if (!_dirty) return;
-            _dirty = false;
-            Save();
+            // 只有落盘成功才清脏标记，失败时保留以便下次重试
+            if (Save()) _dirty = false;
         }
     }
 
@@ -109,13 +109,15 @@ public sealed class ConfigService
             if (File.Exists(_prefsPath))
             {
                 var json = File.ReadAllText(_prefsPath);
-                var loaded = JsonSerializer.Deserialize<Dictionary<string, object>>(json);
+                // 不能反序列化为 Dictionary<string, object>：System.Text.Json 会把值装箱成
+                // JsonElement，导致 Get<T> 里的 "val is T" 永远匹配失败、配置全部读不回来
+                var loaded = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
                 if (loaded != null)
                 {
                     lock (_lock)
                     {
                         foreach (var kvp in loaded)
-                            _config[kvp.Key] = kvp.Value;
+                            _config[kvp.Key] = ConvertElement(kvp.Value);
                     }
                 }
             }
@@ -123,17 +125,48 @@ public sealed class ConfigService
         catch { }
     }
 
-    private void Save()
+    private static object ConvertElement(JsonElement el)
     {
+        switch (el.ValueKind)
+        {
+            case JsonValueKind.String:
+                return el.GetString() ?? "";
+            case JsonValueKind.True:
+                return true;
+            case JsonValueKind.False:
+                return false;
+            case JsonValueKind.Number:
+                if (el.TryGetInt32(out int i)) return i;
+                if (el.TryGetInt64(out long l)) return l;
+                if (el.TryGetDouble(out double d)) return d;
+                return el.GetRawText();
+            default:
+                return el.GetRawText();
+        }
+    }
+
+    private bool Save()
+    {
+        var tmpPath = _prefsPath + ".tmp";
         try
         {
             var dir = Path.GetDirectoryName(_prefsPath)!;
             Directory.CreateDirectory(dir);
             var json = JsonSerializer.Serialize(_config, new JsonSerializerOptions { WriteIndented = true });
-            var tmpPath = _prefsPath + ".tmp";
             File.WriteAllText(tmpPath, json);
-            File.Replace(tmpPath, _prefsPath, null);
+            // File.Replace 要求目标已存在：全新安装下 user_prefs.json 尚未创建时会抛
+            // FileNotFoundException，导致配置永远无法首次落盘
+            if (File.Exists(_prefsPath))
+                File.Replace(tmpPath, _prefsPath, null);
+            else
+                File.Move(tmpPath, _prefsPath);
+            return true;
         }
-        catch { }
+        catch (Exception ex)
+        {
+            try { LoggerService.Error($"保存配置失败: {ex.Message}"); } catch { }
+            try { if (File.Exists(tmpPath)) File.Delete(tmpPath); } catch { }
+            return false;
+        }
     }
 }
