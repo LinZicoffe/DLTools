@@ -488,5 +488,8 @@
   "加载 JLink_x64.dll 失败": "Failed to load JLink_x64.dll",
   "请确认已安装 SEGGER J-Link 驱动。": "Make sure the SEGGER J-Link driver is installed.",
   "发生未处理的错误：": "An unhandled error occurred:",
-  "详情已写入日志": "Details written to log"
+  "详情已写入日志": "Details written to log",
+  "最小化": "Minimize",
+  "最大化": "Maximize",
+  "关闭": "Close"
 }

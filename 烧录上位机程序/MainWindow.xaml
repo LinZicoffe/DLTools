@@ -12,23 +12,20 @@
         Width="1280" Height="800"
         MinWidth="520" MinHeight="560"
         WindowStartupLocation="CenterScreen">
-    <!-- 注：WPF-UI 规定 Mica 背景 必须 ExtendsContentIntoTitleBar=True（否则启动抛
-         "Cannot apply backdrop effect..."），自绘标题栏成本高，故不开背景效果；
-         Fluent 风格由 ControlsDictionary 的控件样式提供 -->
+    <!-- FluentWindow 的模板不含系统标题按钮且会剥离 WS_SYSMENU，窗口三键由
+         标题栏右侧的自绘按钮提供（ui:TitleBar 在 Win11 26200 上点击无响应，
+         见 UiStyles.xaml 的 CaptionButtonStyle 注释）；拖拽/双击最大化由
+         标题栏行接管。未启用 Mica 背景，Fluent 控件风格由 ControlsDictionary 提供 -->
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- 顶部标题栏：应用只保留固件烧录一个功能页，无页面导航 -->
-        <Grid Grid.Row="0" Margin="20,12,20,10">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-
-            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+        <!-- 顶部标题栏：左侧品牌区，右侧最小化/最大化/关闭；
+             应用只保留固件烧录一个功能页，无页面导航 -->
+        <Grid Grid.Row="0" Background="Transparent" MouseLeftButtonDown="HeaderRoot_MouseLeftButtonDown">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="20,11,0,11">
                 <Border Width="36" Height="36" CornerRadius="8" Background="{StaticResource AccentBrush}">
                     <material:MaterialIcon Kind="Flash" Width="20" Height="20"
                                            Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
@@ -41,18 +38,20 @@
                 </StackPanel>
             </StackPanel>
 
-            <ComboBox Grid.Column="1" x:Name="LanguageCombo"
-                      Width="132" Height="34"
-                      VerticalAlignment="Center"
-                      HorizontalContentAlignment="Center"
-                      SelectionChanged="LanguageCombo_SelectionChanged">
-                <ComboBoxItem Content="简体中文" Tag="zh_CN"/>
-                <ComboBoxItem Content="繁體中文" Tag="zh_TW"/>
-                <ComboBoxItem Content="日本語" Tag="ja"/>
-                <ComboBoxItem Content="한국어" Tag="ko"/>
-                <ComboBoxItem Content="English" Tag="en"/>
-                <ComboBoxItem Content="Français" Tag="fr"/>
-            </ComboBox>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                <Button Style="{StaticResource CaptionButtonStyle}" Click="MinimizeButton_Click"
+                        ToolTip="{i18n:Loc '最小化'}">
+                    <material:MaterialIcon Kind="WindowMinimize" Width="14" Height="14"/>
+                </Button>
+                <Button Style="{StaticResource CaptionButtonStyle}" Click="MaximizeButton_Click"
+                        ToolTip="{i18n:Loc '最大化'}">
+                    <material:MaterialIcon x:Name="MaxButtonIcon" Kind="WindowMaximize" Width="13" Height="13"/>
+                </Button>
+                <Button Style="{StaticResource CaptionCloseButtonStyle}" Click="CloseButton_Click"
+                        ToolTip="{i18n:Loc '关闭'}">
+                    <material:MaterialIcon Kind="WindowClose" Width="14" Height="14"/>
+                </Button>
+            </StackPanel>
         </Grid>
         <Border Grid.Row="0" VerticalAlignment="Bottom" Height="1"
                 Background="{StaticResource CardBorderBrush}" Margin="20,0"/>

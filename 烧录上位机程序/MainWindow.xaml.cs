@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Windows;
-using System.Windows.Controls;
+using System.Windows.Input;
+using Material.Icons;
 using 烧录上位机程序.Pages;
 using 烧录上位机程序.Services;
 
@@ -12,20 +13,15 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     // 已确认退出、正在等待后台烧录任务结束期间为 true：
     // 此时再点 X 直接忽略，避免弹第二个确认框与产生分歧的关闭链
     private bool _closingInProgress;
-    // 语言下拉框程序化赋值期间为 true：此时 SelectionChanged 属初始化回声，
-    // 不应再触发 LoadLanguage/写配置（否则每次启动都重写 user_prefs.json）
-    private bool _suppressLanguageEvent;
 
     public MainWindow()
     {
         InitializeComponent();
         DataContext = new 烧录上位机程序.ViewModels.MainWindowViewModel();
 
-        // 设置默认语言
-        var vm = (烧录上位机程序.ViewModels.MainWindowViewModel)DataContext!;
-        var lang = ConfigService.Get<string>("language") ?? "zh_CN";
-        I18nService.LoadLanguage(lang);
-        UpdateLanguageCombo(lang);
+        // 语言切换入口已随标题栏改版移除：文案固定简体中文，
+        // 不再读取历史配置，避免被锁定在无法切回的语言
+        I18nService.LoadLanguage("zh_CN");
     }
 
     protected override async void OnClosing(CancelEventArgs e)
@@ -71,37 +67,37 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         base.OnClosing(e);
     }
 
-    private void LanguageCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    // ===== 自绘标题栏窗口按钮（FluentWindow 剥离了系统标题按钮）=====
+
+    private void MinimizeButton_Click(object sender, RoutedEventArgs e)
+        => WindowState = WindowState.Minimized;
+
+    private void MaximizeButton_Click(object sender, RoutedEventArgs e) => ToggleMaximize();
+
+    private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void ToggleMaximize()
+        => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    protected override void OnStateChanged(EventArgs e)
     {
-        if (_suppressLanguageEvent) return;
-        if (sender is ComboBox comboBox && comboBox.SelectedItem is ComboBoxItem item)
-        {
-            var lang = item.Tag?.ToString() ?? "zh_CN";
-            I18nService.LoadLanguage(lang);
-            ConfigService.Set("language", lang);
-        }
+        base.OnStateChanged(e);
+        // 最大化/还原时切换按钮图标（初始化早期 MaxButtonIcon 尚未赋值）
+        if (MaxButtonIcon is not null)
+            MaxButtonIcon.Kind = WindowState == WindowState.Maximized
+                ? MaterialIconKind.WindowRestore
+                : MaterialIconKind.WindowMaximize;
     }
 
-    private void UpdateLanguageCombo(string lang)
+    private void HeaderRoot_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (LanguageCombo is ComboBox combo)
+        if (e.ChangedButton != MouseButton.Left) return;
+        if (e.ClickCount == 2)
         {
-            _suppressLanguageEvent = true;
-            try
-            {
-                foreach (ComboBoxItem item in combo.Items)
-                {
-                    if (item.Tag?.ToString() == lang)
-                    {
-                        item.IsSelected = true;
-                        break;
-                    }
-                }
-            }
-            finally
-            {
-                _suppressLanguageEvent = false;
-            }
+            ToggleMaximize();
+            return;
         }
+        try { DragMove(); }
+        catch (InvalidOperationException) { /* 按下后原地释放：DragMove 无拖动时抛出，忽略 */ }
     }
 }

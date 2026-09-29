@@ -108,6 +108,59 @@
         </Setter>
     </Style>
 
+    <!-- ============ 标题栏窗口按钮（最小化/最大化/关闭） ============
+         FluentWindow 的模板不含系统标题按钮且会剥离 WS_SYSMENU，而 WPF-UI 3.1.0
+         的 ui:TitleBar 在本机 Win11 26200 上点击无响应（已用最小工程复现，真实
+         SendInput 输入三键全部失效），故改为自绘三键，行为完全可控 -->
+    <Style x:Key="CaptionButtonStyle" TargetType="Button">
+        <Setter Property="Width" Value="46"/>
+        <Setter Property="Height" Value="32"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="bd" Background="{TemplateBinding Background}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="#E9E9E9"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="#DDDDDD"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 关闭按钮：悬停变红 -->
+    <Style x:Key="CaptionCloseButtonStyle" TargetType="Button" BasedOn="{StaticResource CaptionButtonStyle}">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="bd" Background="{TemplateBinding Background}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="#C42B1C"/>
+                            <Setter TargetName="bd" Property="TextElement.Foreground" Value="White"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="#A4262C"/>
+                            <Setter TargetName="bd" Property="TextElement.Foreground" Value="White"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ============ 圆角进度条 ============ -->
     <Style x:Key="RoundedProgressStyle" TargetType="ProgressBar">
         <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
