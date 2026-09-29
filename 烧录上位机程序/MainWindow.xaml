@@ -51,7 +51,8 @@
             </ComboBox>
         </DockPanel>
 
-        <!-- 内容区 -->
-        <ContentControl Grid.Row="1" Content="{Binding CurrentPage}"/>
+        <!-- 内容区：Page 的可视父级只能是 Window/Frame，必须用 Frame 承载（ContentControl 会抛
+             "Page 只能具有 Window 或 Frame 父级"）；直接绑 Content 不产生导航日志 -->
+        <Frame Grid.Row="1" Content="{Binding CurrentPage}" NavigationUIVisibility="Hidden"/>
     </Grid>
 </Window>

@@ -35,6 +35,5 @@ public partial class App : Application
         I18nService.LoadLanguage(ConfigService.Get<string>("language") ?? "zh_CN");
 
         var mainWindow = new MainWindow();
-        mainWindow.Show();
     }
 }
