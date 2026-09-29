@@ -165,7 +165,7 @@ public static class FlashFileParser
         catch (Exception e) { throw new FileParseError($"ELF 解析失败：{e.Message}"); }
     }
 
-    private static FileInfo ParseHex(string path)
+    private static FlashFileInfo ParseHex(string path)
     {
         try
         {
@@ -186,7 +186,7 @@ public static class FlashFileParser
         catch (Exception e) { throw new FileParseError($"HEX 解析失败：{e.Message}"); }
     }
 
-    private static FileInfo ParseBin(string path, int startAddr)
+    private static FlashFileInfo ParseBin(string path, int startAddr)
     {
         int size = (int)new System.IO.FileInfo(path).Length;
         if (size == 0)
@@ -258,7 +258,7 @@ public static class FlashFileParser
                 throw new FileParseError("不是有效的 ELF 文件");
             bool isLe = ident[5] == 1;
 
-            ushort eShOff = ReadUInt32(ident, 32, isLe);
+            uint eShOff = ReadUInt32(ident, 32, isLe);
             ushort eShEntSize = ReadUInt16(ident, 46, isLe);
             ushort eShNum = ReadUInt16(ident, 48, isLe);
             ushort eShStrNdx = ReadUInt16(ident, 50, isLe);
@@ -325,7 +325,7 @@ public static class FlashFileParser
             var ident = reader.ReadBytes(16);
             bool isLe = ident[5] == 1;
 
-            ushort eShOff = ReadUInt32(ident, 32, isLe);
+            uint eShOff = ReadUInt32(ident, 32, isLe);
             ushort eShEntSize = ReadUInt16(ident, 46, isLe);
             ushort eShNum = ReadUInt16(ident, 48, isLe);
             ushort eShStrNdx = ReadUInt16(ident, 50, isLe);
@@ -380,7 +380,7 @@ public static class FlashFileParser
             bool isLe = ident[5] == 1;
 
             uint eEntry = ReadUInt32(ident, 24, isLe);
-            ushort ePhOff = ReadUInt32(ident, 28, isLe);
+            uint ePhOff = ReadUInt32(ident, 28, isLe);
             ushort ePhEntSize = ReadUInt16(ident, 42, isLe);
             ushort ePhNum = ReadUInt16(ident, 44, isLe);
 
@@ -439,7 +439,7 @@ public static class FlashFileParser
             bool is64 = ident[4] == 2;
             if (is64) throw new FileParseError("不支持 ELF64");
 
-            ushort eShOff = ReadUInt32(ident, 32, isLe);
+            uint eShOff = ReadUInt32(ident, 32, isLe);
             ushort eShEntSize = ReadUInt16(ident, 46, isLe);
             ushort eShNum = ReadUInt16(ident, 48, isLe);
             ushort eShStrNdx = ReadUInt16(ident, 50, isLe);
@@ -466,11 +466,11 @@ public static class FlashFileParser
                 var shStrHeader = reader.ReadBytes(40);
                 uint shStrBase = ReadUInt32(shStrHeader, 16, isLe);
                 fs.Position = shStrBase;
-                var strTable = reader.ReadBytes((int)ReadUInt32(shStrHeader, 20, isLe));
+                var shStrTable = reader.ReadBytes((int)ReadUInt32(shStrHeader, 20, isLe));
                 int nameOff = (int)shName;
-                int nameEnd = Array.IndexOf(strTable, (byte)0, nameOff);
-                if (nameEnd < 0) nameEnd = strTable.Length;
-                string name = System.Text.Encoding.ASCII.GetString(strTable, nameOff, nameEnd - nameOff);
+                int nameEnd = Array.IndexOf(shStrTable, (byte)0, nameOff);
+                if (nameEnd < 0) nameEnd = shStrTable.Length;
+                string name = System.Text.Encoding.ASCII.GetString(shStrTable, nameOff, nameEnd - nameOff);
 
                 if (name == ".symtab")
                 {
@@ -487,6 +487,10 @@ public static class FlashFileParser
             }
 
             if (symAddr < 0) return new List<Symbol>();
+
+            if (strTabAddr < 0) return new List<Symbol>();
+            fs.Position = strTabAddr;
+            var strTable = reader.ReadBytes(strTabSize);
 
             int symEntSize = 16; // ELF32 symbol size
             int numSymbols = symSize / symEntSize;
