@@ -1,20 +1,25 @@
 using System;
 using System.Linq;
-using System.Runtime.InteropServices;
 using 烧录上位机程序.Models;
-using 烧录上位机程序.Services;
 
 namespace 烧录上位机程序.Services.JLink;
 
 /// <summary>
-/// J-Link 烧录后端：直接调用 JLink_x64.dll 的 P/Invoke 封装。
+/// J-Link 烧录后端：通过 DllLoader 直接调用 JLink_x64.dll。
 ///
-/// 连接序列严格按 Python 源码 jlink_backend.py 的 flash 版协议：
-/// open → close → open(serial) → set_tif → set_speed → connect。
-/// set_tif 是 SWD/JTAG 二选一（不可 OR 起来）。
+/// 调用序列与 pylink-square 1.6.0 逐项对齐（Python 参考 src/core/probe/jlink_backend.py）：
+/// - 连接：open → close → open(serial) → set_tif → set_speed → connect
+///   （pylink open() 内部自带前置 close；"读 SN 再重开"双开来自 Python 参考实现）
+/// - set_tif：SWD/JTAG 二选一（pylink enums.JLinkInterfaces：JTAG=0, SWD=1）
+/// - 编程：每段 halt(容忍失败) → BeginDownload(0) → WriteMem → EndDownload
+/// - 校验：ReadMemEx 按 4096 字节分块比对（Python _verify_range CHUNK=4096）
+/// - 整片擦除：halt(容忍失败) → JLINK_EraseChip
+/// - 复位：SetResetDelay(0) → Reset()；halt 模式追加 Halt()，run 模式追加 Restart()
 /// </summary>
 public sealed class JLinkBackend : IDisposable
 {
+    private const int VerifyChunk = 4096; // Python _verify_range 的分块大小
+
     private readonly DllLoader _dll;
     private readonly Action<string, string> _log;
     private bool _connected = false;
@@ -28,8 +33,9 @@ public sealed class JLinkBackend : IDisposable
     public bool IsConnected => _connected;
     public string ConnectedSerial { get; private set; } = "";
 
+    // pylink enums.JLinkInterfaces：JTAG=0, SWD=1
+    public const int JLINK_IF_JTAG = 0;
     public const int JLINK_IF_SWD = 1;
-    public const int JLINK_IF_JTAG = 2;
     public const string EraseModeChip = "chip";
     public const string EraseModeSector = "sector";
     public const string PostActionNone = "none";
@@ -46,45 +52,54 @@ public sealed class JLinkBackend : IDisposable
 
         if (!string.IsNullOrEmpty(remote))
         {
+            // 远程模式：跳过 USB 枚举与 serial 校验，按 ip:port 双开
             _log("info", $"J-Link 远程模式: {remote}");
-            if (_dll.IsConnected() == 0)
+            var (ip, port) = SplitRemote(remote);
+            if (!_dll.IsTargetConnected())
             {
-                _dll.OpenIP(remote);
-                ConnectedSerial = _dll.GetSerialNumber().ToString();
+                _dll.OpenByIp(ip, port);
+                ConnectedSerial = _dll.GetSN().ToString();
                 _dll.Close();
-                _dll.OpenIP(remote);
+                _dll.OpenByIp(ip, port);
             }
+            _log("info", $"J-Link SN: {ConnectedSerial} (远程 {remote})");
         }
         else
         {
-            if (_dll.IsConnected() == 0)
+            // 本地 USB 模式：读 SN 再重开的双开协议
+            if (!_dll.IsTargetConnected())
             {
-                if (string.IsNullOrEmpty(serial) || serial == "0")
+                if (int.TryParse(serial, out int sn) && sn > 0)
                 {
-                    _dll.Open();
-                    var sn = _dll.GetSerialNumber();
-                    ConnectedSerial = sn.ToString();
-                    _dll.Close();
-                    _dll.OpenWithSerial(int.Parse(ConnectedSerial));
+                    _dll.OpenBySerial(sn);
                 }
                 else
                 {
-                    _dll.OpenWithSerial(int.Parse(serial));
-                    var sn = _dll.GetSerialNumber();
-                    ConnectedSerial = sn.ToString();
-                    _dll.Close();
-                    _dll.OpenWithSerial(int.Parse(ConnectedSerial));
+                    _dll.OpenDefault();
                 }
+                ConnectedSerial = _dll.GetSN().ToString();
+                _dll.Close();
+                _dll.OpenBySerial(int.Parse(ConnectedSerial));
             }
             _log("info", $"J-Link SN: {ConnectedSerial}");
         }
 
+        // SWD / JTAG 二选一（pylink set_tif：不可 OR 起来）
         int tif = p.Interface == "SWD" ? JLINK_IF_SWD : JLINK_IF_JTAG;
-        _dll.SetTIF(tif);
+        _dll.SetTif(tif);
         _dll.SetSpeed(p.SpeedKhz);
         _dll.Connect(p.DeviceName);
         _connected = true;
-        _log("info", $"目标已连接: {p.DeviceName}");
+        _log("info", $"Target connected: {p.DeviceName}");
+    }
+
+    private static (string Ip, int Port) SplitRemote(string remote)
+    {
+        // Python: addr, port = ip_addr.rsplit(':', 1)；无端口时用 SEGGER 默认 19020
+        int idx = remote.LastIndexOf(':');
+        if (idx > 0 && int.TryParse(remote[(idx + 1)..], out int port))
+            return (remote[..idx], port);
+        return (remote, 19020);
     }
 
     public void Erase(string mode)
@@ -92,11 +107,18 @@ public sealed class JLinkBackend : IDisposable
         if (mode == EraseModeChip)
         {
             _log("info", "开始整片擦除...");
-            int result = _dll.EraseChip();
-            if (result != 0)
-                throw new InvalidOperationException($"擦除失败，错误码: {result}");
+            TryHalt();
+            _dll.EraseChip();
             _log("info", "整片擦除完成");
         }
+        // sector 模式：WriteMem 下载事务内由 DLL 按扇区隐式擦除，不显式整片擦
+    }
+
+    /// <summary>pylink erase()/flash() 前置 halt，失败容忍（目标可能已停）。</summary>
+    private void TryHalt()
+    {
+        try { _dll.Halt(); }
+        catch (JLinkDllException ex) { _log("warn", $"halt: {ex.Message}"); }
     }
 
     public void Program(string filePath, string fileFormat, int binStartAddr, Action<int, int> onProgress)
@@ -119,15 +141,14 @@ public sealed class JLinkBackend : IDisposable
             var data = ih.ToBinArray(start, endExclusive);
             if (data.Length == 0) continue;
 
-            GCHandle handle = GCHandle.Alloc(data, GCHandleType.Pinned);
-            try
-            {
-                _dll.Flash(handle.AddrOfPinnedObject(), start);
-            }
-            finally
-            {
-                handle.Free();
-            }
+            // pylink flash(data, addr)：halt → Begin(0) → WriteMem → End
+            TryHalt();
+            _dll.BeginDownload(0);
+            int written = _dll.WriteMem(start, data);
+            _dll.EndDownload(); // 编程失败的权威信号是 EndDownload 的返回码
+            // pylink 明确说明 WriteMem 返回值可以不等于写入长度而非错误，此处仅记录
+            if (written != data.Length)
+                _log("warn", $"WriteMem 返回 {written}/{data.Length} 字节 @ 0x{start:X8}");
 
             done += len;
             int percent = Math.Min(100, done * 100 / totalBytes);
@@ -148,34 +169,35 @@ public sealed class JLinkBackend : IDisposable
             var expected = ih.ToBinArray(start, endExclusive);
             if (expected.Length == 0) continue;
 
-            var buffer = new byte[len];
-            _dll.MemoryRead(start, len, buffer, 32);
-
-            for (int i = 0; i < len; i++)
+            // 与 Python _verify_range 一致：4096 字节分块读取比对
+            for (int off = 0; off < len; off += VerifyChunk)
             {
-                if (buffer[i] != expected[i])
-                    throw new VerifyMismatch(start + i, len);
+                int n = Math.Min(VerifyChunk, len - off);
+                var chunk = new byte[n];
+                _dll.ReadMem(start + off, chunk);
+                for (int i = 0; i < n; i++)
+                {
+                    if (chunk[i] != expected[off + i])
+                        throw new VerifyMismatch(start + off + i, len);
+                }
             }
         }
     }
 
     public void Reset(bool halt, bool run)
     {
+        // pylink reset(ms=0)：SetResetDelay(0) + JLINKARM_Reset()（无参数）
+        _dll.SetResetDelay(0);
+        _dll.Reset();
         if (halt && !run)
         {
-            _dll.Reset(1);
             _dll.Halt();
             _log("info", "CPU halted after reset");
         }
         else if (run)
         {
-            _dll.Reset(0);
-            _dll.Go();
+            _dll.Restart(); // pylink restart() = GoEx(0, 0)
             _log("info", "CPU running");
-        }
-        else
-        {
-            _dll.Reset(0);
         }
     }
 

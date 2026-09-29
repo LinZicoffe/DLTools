@@ -6,13 +6,31 @@ using System.Text;
 namespace 烧录上位机程序.Services.JLink;
 
 /// <summary>
-/// JLink_x64.dll 加载器与 P/Invoke 完整封装。
+/// J-Link DLL 调用异常（对应 pylink 的 JLinkException 家族）。
+/// </summary>
+public class JLinkDllException : Exception
+{
+    public JLinkDllException(string message) : base(message) { }
+}
+
+/// <summary>
+/// JLink_x64.dll 加载器与 P/Invoke 封装。
 ///
 /// 关键：目标机器上 DLL 不在标准目录（不在 System32/PATH），
 /// 必须在加载前通过 SetDllDirectory 指定搜索路径。
 ///
-/// API 清单来源：src/core/probe/jlink_backend.py / pylink_rtt_backend.py
-/// 逐项对应 pylink-square 1.6.0 对 JLinkARM DLL 的调用。
+/// API 映射依据（与 pylink-square 1.6.0 对 DLL 的调用逐项对齐，
+/// 导出名全部经 V8.14 真实导出表核验，清单见 docs/JLink_DLL_exports.txt）：
+/// - 打开：JLINKARM_EMU_SelectByUSBSN / JLINKARM_SelectIP / JLINKARM_SelectUSB
+///         + JLINKARM_OpenEx（返回错误字符串指针，NULL 表示成功）
+/// - 设备：JLINKARM_DEVICE_GetIndex 校验 + JLINKARM_ExecCommand("Device = &lt;名&gt;")
+/// - 烧录：JLINKARM_BeginDownload(0) → JLINKARM_WriteMem → JLINKARM_EndDownload
+/// - 擦除：JLINK_EraseChip（注意前缀是 JLINK_，无 ARM）
+/// - 校验：JLINKARM_ReadMemEx（按字节访问，访问宽度 flags=0）
+///
+/// 调用约定：pylink library.py 的 _standard_calls_ 指明 Windows 下
+/// JLINKARM_WriteMem / BeginDownload / EndDownload / JLINK_EraseChip 为
+/// __stdcall，其余为 __cdecl（x64 单一调用约定，标注仅保持语义正确）。
 /// </summary>
 public sealed class DllLoader : IDisposable
 {
@@ -34,144 +52,86 @@ public sealed class DllLoader : IDisposable
 
     private IntPtr _dllHandle = IntPtr.Zero;
     private bool _disposed = false;
+    private bool _open = false;
 
-    #region JLinkARM structures
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
-    public struct JLinkDeviceInfo
-    {
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string Name;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string Manufacturer;
-        public int FlashAddr;
-        public int FlashSize;
-        public int RAMAddr;
-        public int RAMSize;
-        public int Core;
-        public int CoreId;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct JLinkRttBufDesc
-    {
-        public int ID;
-        public int SizeOfBuffer;
-        public int pBuffer;
-        public int Next;
-    }
-
-    #endregion
-
-    #region JLinkARM function delegates
+    #region 导出函数委托（ cdecl 除非注明 stdcall ）
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_GetDLLVersionDelegate();
+    private delegate int GetDLLVersionDelegate();
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_EMU_GetListDelegate(IntPtr pList, int nMaxListSize);
+    private delegate int IsOpenDelegate();
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_OpenDelegate();
+    private delegate int EmuIsConnectedDelegate();
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_OpenWithSerialDelegate(int SerialNo);
+    private delegate int IsConnectedDelegate();
+
+    // OpenEx 两个日志回调传 NULL（SEGGER 允许），失败信息经返回的 char* 传递
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate IntPtr OpenExDelegate(IntPtr logFunc, IntPtr errorFunc);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_OpenIPDelegate(string IpAddr);
+    private delegate void CloseDelegate();
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_CloseDelegate();
+    private delegate int EmuSelectByUsbSnDelegate(int serialNo);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_GetSerialNumberDelegate();
+    private delegate int SelectIpDelegate([MarshalAs(UnmanagedType.LPStr)] string ip, int port);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_SetTIFDelegate(int TIF);
+    private delegate int SelectUsbDelegate(int port);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_SetSpeedDelegate(int Speed);
+    private delegate int GetSNDelegate();
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_ConnectDelegate(string Device);
+    private delegate int TifSelectDelegate(int tif);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_ResetDelegate(int halt);
+    private delegate void SetSpeedDelegate(int speedKhz);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_HaltDelegate();
+    private delegate int DeviceGetIndexDelegate([MarshalAs(UnmanagedType.LPStr)] string name);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_GoDelegate();
+    private delegate int ExecCommandDelegate([MarshalAs(UnmanagedType.LPStr)] string command, byte[] errBuf, int bufSize);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_FlashDelegate(IntPtr pData, int Addr);
+    private delegate int ConnectDelegate();
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_MemoryReadDelegate(int Addr, int Count, IntPtr pData, int nBits);
+    private delegate void SetResetDelayDelegate(int ms);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_MemoryWriteDelegate(int Addr, IntPtr pData, int Count);
+    private delegate int ResetDelegate();
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_MemoryWrite16Delegate(int Addr, IntPtr pData, int Count);
+    private delegate int HaltDelegate();
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_GetFirmwareVersionDelegate();
+    private delegate int IsHaltedDelegate();
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_GetHardwareVersionDelegate();
+    private delegate int GoExDelegate(int numInstructions, int flags);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate IntPtr JLINKARM_GetCoreNameDelegate();
+    private delegate int ReadMemExDelegate(int addr, int numBytes, IntPtr pData, int accessFlags);
 
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_GetCoreIdDelegate();
+    // ↓ pylink _standard_calls_：Windows 下为 __stdcall
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int WriteMemDelegate(int addr, int numBytes, IntPtr pData);
 
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_GetCoreCPUDellegate();
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int BeginDownloadDelegate(int flags);
 
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_EraseDelegate();
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int EndDownloadDelegate();
 
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_PowerOnDelegate(int Default);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_PowerOffDelegate(int Default);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_IsConnectedDelegate();
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_GetNumDevicesDelegate();
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_GetDeviceInfoDelegate(int Index, ref JLinkDeviceInfo Info, int InfoSize);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_RTT_StartDelegate();
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_RTT_StopDelegate();
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_RTT_ReadDelegate(int Channel, IntPtr pBuffer, int MaxSize);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_RTT_WriteDelegate(int Channel, IntPtr pData, int Size);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_RTT_GetNumUpBuffersDelegate();
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int JLINKARM_RTT_GetBufDescDelegate(int Channel, int Up, ref JLinkRttBufDesc Desc);
-
-    #endregion
-
-    #region Cached delegates
-
-    private int _dllVersion;
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int EraseChipDelegate();
 
     #endregion
 
@@ -238,110 +198,206 @@ public sealed class DllLoader : IDisposable
         return Marshal.GetDelegateForFunctionPointer<T>(addr);
     }
 
-    private IntPtr GetProcAddress(string funcName)
-    {
-        var addr = GetProcAddress(_dllHandle, funcName);
-        if (addr == IntPtr.Zero)
-            throw new MissingMethodException($"JLink_x64.dll 中未找到函数: {funcName}");
-        return addr;
-    }
-
     #region JLinkARM API 封装
 
     public int GetDLLVersion()
     {
-        var fn = GetDelegate<JLINKARM_GetDLLVersionDelegate>("JLINKARM_GetDLLVersion");
-        return fn();
+        return GetDelegate<GetDLLVersionDelegate>("JLINKARM_GetDLLVersion")();
     }
 
-    public int GetVersionMajor() => (GetDLLVersion() >> 16) & 0xFFFF;
-    public int GetVersionMinor() => GetDLLVersion() & 0xFFFF;
+    // 版本编码为十进制打包：major*10000 + minor*100 + patch。
+    // 实测本机 DLL 稳定返回 97600 = 9.76，与 PE 资源一致（首测曾见瞬态 97344）。
+    // 编码未在 SEGGER 文档中确认，此解码仅作展示用途，烧录链路不依赖它。
+    public int GetVersionMajor() => GetDLLVersion() / 10000;
+    public int GetVersionMinor() => (GetDLLVersion() % 10000) / 100;
 
-    public int EnumEmulators(IntPtr pList, int nMaxListSize)
+    /// <summary>DLL 是否已打开仿真器（JLINKARM_IsOpen）。</summary>
+    public bool IsDllOpen()
     {
-        var fn = GetDelegate<JLINKARM_EMU_GetListDelegate>("JLINKARM_EMU_GetList");
-        return fn(pList, nMaxListSize);
+        return GetDelegate<IsOpenDelegate>("JLINKARM_IsOpen")() != 0;
     }
 
-    public int Open()
+    /// <summary>仿真器连接状态（JLINKARM_EMU_IsConnected）。</summary>
+    public bool EmuIsConnected()
     {
-        var fn = GetDelegate<JLINKARM_OpenDelegate>("JLINKARM_Open");
-        return fn();
+        return GetDelegate<EmuIsConnectedDelegate>("JLINKARM_EMU_IsConnected")() != 0;
     }
 
-    public int OpenWithSerial(int serialNo)
+    /// <summary>目标芯片连接状态（pylink target_connected：已打开 + 仿真器连 + CPU 连）。</summary>
+    public bool IsTargetConnected()
     {
-        var fn = GetDelegate<JLINKARM_OpenWithSerialDelegate>("JLINKARM_OpenWithSerial");
-        return fn(serialNo);
+        return IsDllOpen()
+            && EmuIsConnected()
+            && GetDelegate<IsConnectedDelegate>("JLINKARM_IsConnected")() != 0;
     }
 
-    public int OpenIP(string ipAddr)
+    /// <summary>按 USB 序列号打开（pylink open(serial_no=...)）。</summary>
+    public void OpenBySerial(int serialNo)
     {
-        var fn = GetDelegate<JLINKARM_OpenIPDelegate>("JLINKARM_OpenIP");
-        return fn(ipAddr);
+        EnsureClosed(); // pylink open() 首行先 close，避免句柄计数错乱
+        int res = GetDelegate<EmuSelectByUsbSnDelegate>("JLINKARM_EMU_SelectByUSBSN")(serialNo);
+        if (res < 0)
+            throw new JLinkDllException($"未找到序列号 {serialNo} 的 J-Link，请检查 USB 连接");
+        OpenExCore();
     }
 
-    public int Close()
+    /// <summary>按 IP 打开（pylink open(ip_addr="ip:port") 走 JLINKARM_SelectIP(字符串, 端口)）。</summary>
+    public void OpenByIp(string ip, int port)
     {
-        var fn = GetDelegate<JLINKARM_CloseDelegate>("JLINKARM_Close");
-        return fn();
+        EnsureClosed();
+        int res = GetDelegate<SelectIpDelegate>("JLINKARM_SelectIP")(ip, port);
+        if (res != 0)
+            throw new JLinkDllException($"无法连接 {ip}:{port} 处的 J-Link 仿真器");
+        OpenExCore();
     }
 
-    public int GetSerialNumber()
+    /// <summary>打开默认 USB 仿真器（pylink open() 无参路径：SelectUSB(0)）。</summary>
+    public void OpenDefault()
     {
-        var fn = GetDelegate<JLINKARM_GetSerialNumberDelegate>("JLINKARM_GetSerialNumber");
-        return fn();
+        EnsureClosed();
+        int res = GetDelegate<SelectUsbDelegate>("JLINKARM_SelectUSB")(0);
+        if (res != 0)
+            throw new JLinkDllException("无法连接默认 J-Link 仿真器");
+        OpenExCore();
     }
 
-    public int SetTIF(int tif)
+    private void OpenExCore()
     {
-        var fn = GetDelegate<JLINKARM_SetTIFDelegate>("JLINKARM_SetTIF");
-        return fn(tif);
+        IntPtr err = GetDelegate<OpenExDelegate>("JLINKARM_OpenEx")(IntPtr.Zero, IntPtr.Zero);
+        if (err != IntPtr.Zero)
+        {
+            string msg = Marshal.PtrToStringAnsi(err) ?? "未知错误";
+            throw new JLinkDllException($"打开 J-Link 失败: {msg}");
+        }
+        _open = true;
     }
 
-    public int SetSpeed(int speedKhz)
+    /// <summary>关闭（JLINKARM_Close，幂等）。</summary>
+    public void Close()
     {
-        var fn = GetDelegate<JLINKARM_SetSpeedDelegate>("JLINKARM_SetSpeed");
-        return fn(speedKhz);
+        if (!_open) return;
+        GetDelegate<CloseDelegate>("JLINKARM_Close")();
+        _open = false;
     }
 
-    public int Connect(string device)
+    /// <summary>当前打开仿真器的序列号（JLINKARM_GetSN）。</summary>
+    public int GetSN()
     {
-        var fn = GetDelegate<JLINKARM_ConnectDelegate>("JLINKARM_Connect");
-        return fn(device);
+        return GetDelegate<GetSNDelegate>("JLINKARM_GetSN")();
     }
 
-    public int Reset(int halt)
+    /// <summary>
+    /// 选择目标接口（JLINKARM_TIF_Select）。
+    /// TIF 值与 pylink enums.JLinkInterfaces 一致：JTAG=0, SWD=1。
+    /// 返回 0 成功 / 1 失败。
+    /// </summary>
+    public void SetTif(int tif)
     {
-        var fn = GetDelegate<JLINKARM_ResetDelegate>("JLINKARM_Reset");
-        return fn(halt);
+        int res = GetDelegate<TifSelectDelegate>("JLINKARM_TIF_Select")(tif);
+        if (res != 0)
+            throw new JLinkDllException($"选择调试接口失败 (TIF={tif})，当前 J-Link 可能不支持该接口");
     }
 
-    public int Halt()
+    public void SetSpeed(int speedKhz)
     {
-        var fn = GetDelegate<JLINKARM_HaltDelegate>("JLINKARM_Halt");
-        return fn();
+        GetDelegate<SetSpeedDelegate>("JLINKARM_SetSpeed")(speedKhz);
     }
 
-    public int Go()
+    /// <summary>
+    /// 连接目标芯片（pylink connect() 三步）：
+    /// 1. JLINKARM_DEVICE_GetIndex 校验设备名受支持（&lt;=0 不支持）
+    /// 2. ExecCommand("Device = &lt;名&gt;"）—— DLL 无 SetDevice 导出，设备选择只能走命令通道
+    /// 3. JLINKARM_Connect()（无参数，&lt;0 失败）
+    /// </summary>
+    public void Connect(string deviceName)
     {
-        var fn = GetDelegate<JLINKARM_GoDelegate>("JLINKARM_Go");
-        return fn();
+        int index = GetDelegate<DeviceGetIndexDelegate>("JLINKARM_DEVICE_GetIndex")(deviceName);
+        if (index <= 0)
+            throw new JLinkDllException($"不支持的设备: {deviceName}，请检查设备名（参考 SEGGER 支持设备列表）");
+
+        ExecCommand($"Device = {deviceName}");
+
+        int res = GetDelegate<ConnectDelegate>("JLINKARM_Connect")();
+        if (res < 0)
+            throw new JLinkDllException($"连接目标失败，错误码: {res}");
     }
 
-    public int Flash(IntPtr pData, int addr)
+    /// <summary>执行 DLL 命令（JLINKARM_ExecCommand，错误写入 256 字节缓冲）。</summary>
+    public void ExecCommand(string command)
     {
-        var fn = GetDelegate<JLINKARM_FlashDelegate>("JLINKARM_Flash");
-        return fn(pData, addr);
+        const int ErrBufSize = 256; // SEGGER 文档的错误缓冲口径（pylink 实现用 336，取 256 均安全）
+        var errBuf = new byte[ErrBufSize];
+        GetDelegate<ExecCommandDelegate>("JLINKARM_ExecCommand")(command, errBuf, ErrBufSize);
+        int end = Array.IndexOf(errBuf, (byte)0);
+        if (end < 0) end = errBuf.Length;
+        string err = Encoding.ASCII.GetString(errBuf, 0, end).Trim();
+        if (err.Length > 0)
+            throw new JLinkDllException($"ExecCommand 失败: {command} → {err}");
     }
 
-    public int MemoryRead(int addr, int count, byte[] buffer, int nBits = 32)
+    public void SetResetDelay(int ms)
     {
-        var fn = GetDelegate<JLINKARM_MemoryReadDelegate>("JLINKARM_MemoryRead");
-        GCHandle handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        GetDelegate<SetResetDelayDelegate>("JLINKARM_SetResetDelay")(ms);
+    }
+
+    /// <summary>复位目标（JLINKARM_Reset，无参数；&lt;0 失败）。</summary>
+    public void Reset()
+    {
+        int res = GetDelegate<ResetDelegate>("JLINKARM_Reset")();
+        if (res < 0)
+            throw new JLinkDllException($"复位失败，错误码: {res}");
+    }
+
+    /// <summary>暂停 CPU（JLINKARM_Halt，返回 0 表示成功）。</summary>
+    public void Halt()
+    {
+        int res = GetDelegate<HaltDelegate>("JLINKARM_Halt")();
+        if (res != 0)
+            throw new JLinkDllException($"暂停 CPU 失败，错误码: {res}");
+    }
+
+    /// <summary>恢复运行（pylink restart()：目标处于 halted 时调 GoEx(0,0)；负返回为错误码不算 halted）。</summary>
+    public void Restart()
+    {
+        if (GetDelegate<IsHaltedDelegate>("JLINKARM_IsHalted")() > 0)
+            GetDelegate<GoExDelegate>("JLINKARM_GoEx")(0, 0);
+    }
+
+    /// <summary>整片擦除（JLINK_EraseChip；&lt;0 失败，正值为擦除字节数）。</summary>
+    public void EraseChip()
+    {
+        int res = GetDelegate<EraseChipDelegate>("JLINK_EraseChip")();
+        if (res < 0)
+            throw new JLinkDllException($"整片擦除失败，错误码: {res}");
+    }
+
+    /// <summary>开始下载事务（pylink flash()：Begin → WriteMem → End）。</summary>
+    public void BeginDownload(int flags = 0)
+    {
+        int res = GetDelegate<BeginDownloadDelegate>("JLINKARM_BeginDownload")(flags);
+        if (res < 0)
+            throw new JLinkDllException($"BeginDownload 失败，错误码: {res}");
+    }
+
+    /// <summary>结束下载事务并触发实际编程（&lt;0 失败）。</summary>
+    public void EndDownload()
+    {
+        int res = GetDelegate<EndDownloadDelegate>("JLINKARM_EndDownload")();
+        if (res < 0)
+            throw new JLinkDllException($"EndDownload 失败（编程/校验未完成），错误码: {res}");
+    }
+
+    /// <summary>
+    /// 写入内存（JLINKARM_WriteMem，stdcall）。DLL 在下载事务内自动按扇区擦除+编程。
+    /// 返回写入字节数。
+    /// </summary>
+    public int WriteMem(int addr, byte[] data)
+    {
+        var fn = GetDelegate<WriteMemDelegate>("JLINKARM_WriteMem");
+        GCHandle handle = GCHandle.Alloc(data, GCHandleType.Pinned);
         try
         {
-            return fn(addr, count, handle.AddrOfPinnedObject(), nBits);
+            return fn(addr, data.Length, handle.AddrOfPinnedObject());
         }
         finally
         {
@@ -349,122 +405,31 @@ public sealed class DllLoader : IDisposable
         }
     }
 
-    public int MemoryWrite(int addr, IntPtr pData, int count)
+    /// <summary>
+    /// 读取内存（JLINKARM_ReadMemEx，按字节访问 accessFlags=0，与 pylink memory_read 默认一致）。
+    /// 返回读取字节数，&lt;0 抛异常。
+    /// </summary>
+    public int ReadMem(int addr, byte[] buffer)
     {
-        var fn = GetDelegate<JLINKARM_MemoryWriteDelegate>("JLINKARM_MemoryWrite");
-        return fn(addr, pData, count);
+        var fn = GetDelegate<ReadMemExDelegate>("JLINKARM_ReadMemEx");
+        GCHandle handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        try
+        {
+            int res = fn(addr, buffer.Length, handle.AddrOfPinnedObject(), 0);
+            if (res < 0)
+                throw new JLinkDllException($"读取内存失败 @ 0x{addr:X8}，错误码: {res}");
+            return res;
+        }
+        finally
+        {
+            handle.Free();
+        }
     }
 
-    public int MemoryWrite16(int addr, IntPtr pData, int count)
+    private void EnsureClosed()
     {
-        var fn = GetDelegate<JLINKARM_MemoryWrite16Delegate>("JLINKARM_MemoryWrite16");
-        return fn(addr, pData, count);
-    }
-
-    public int GetFirmwareVersion()
-    {
-        var fn = GetDelegate<JLINKARM_GetFirmwareVersionDelegate>("JLINKARM_GetFirmwareVersion");
-        return fn();
-    }
-
-    public int GetHardwareVersion()
-    {
-        var fn = GetDelegate<JLINKARM_GetHardwareVersionDelegate>("JLINKARM_GetHardwareVersion");
-        return fn();
-    }
-
-    public string GetCoreName()
-    {
-        var fn = GetDelegate<JLINKARM_GetCoreNameDelegate>("JLINKARM_GetCoreName");
-        var ptr = fn();
-        return Marshal.PtrToStringAnsi(ptr) ?? "";
-    }
-
-    public int GetCoreId()
-    {
-        var fn = GetDelegate<JLINKARM_GetCoreIdDelegate>("JLINKARM_GetCoreId");
-        return fn();
-    }
-
-    public int GetCoreCPU()
-    {
-        var fn = GetDelegate<JLINKARM_GetCoreCPUDellegate>("JLINKARM_GetCoreCPU");
-        return fn();
-    }
-
-    public int EraseChip()
-    {
-        var fn = GetDelegate<JLINKARM_EraseDelegate>("JLINKARM_Erase");
-        return fn();
-    }
-
-    public int PowerOn(int def = 0)
-    {
-        var fn = GetDelegate<JLINKARM_PowerOnDelegate>("JLINKARM_PowerOn");
-        return fn(def);
-    }
-
-    public int PowerOff(int def = 0)
-    {
-        var fn = GetDelegate<JLINKARM_PowerOffDelegate>("JLINKARM_PowerOff");
-        return fn(def);
-    }
-
-    public int IsConnected()
-    {
-        var fn = GetDelegate<JLINKARM_IsConnectedDelegate>("JLINKARM_IsConnected");
-        return fn();
-    }
-
-    public int GetNumDevices()
-    {
-        var fn = GetDelegate<JLINKARM_GetNumDevicesDelegate>("JLINKARM_GetNumDevices");
-        return fn();
-    }
-
-    public JLinkDeviceInfo? GetDeviceInfo(int index)
-    {
-        var fn = GetDelegate<JLINKARM_GetDeviceInfoDelegate>("JLINKARM_GetDeviceInfo");
-        var info = new JLinkDeviceInfo();
-        int result = fn(index, ref info, Marshal.SizeOf(info));
-        if (result == 0) return null;
-        return info;
-    }
-
-    public int RTT_Start()
-    {
-        var fn = GetDelegate<JLINKARM_RTT_StartDelegate>("JLINKARM_RTT_Start");
-        return fn();
-    }
-
-    public int RTT_Stop()
-    {
-        var fn = GetDelegate<JLINKARM_RTT_StopDelegate>("JLINKARM_RTT_Stop");
-        return fn();
-    }
-
-    public int RTT_Read(int channel, IntPtr pBuffer, int maxSize)
-    {
-        var fn = GetDelegate<JLINKARM_RTT_ReadDelegate>("JLINKARM_RTT_Read");
-        return fn(channel, pBuffer, maxSize);
-    }
-
-    public int RTT_Write(int channel, IntPtr pData, int size)
-    {
-        var fn = GetDelegate<JLINKARM_RTT_WriteDelegate>("JLINKARM_RTT_Write");
-        return fn(channel, pData, size);
-    }
-
-    public int RTT_GetNumUpBuffers()
-    {
-        var fn = GetDelegate<JLINKARM_RTT_GetNumUpBuffersDelegate>("JLINKARM_RTT_GetNumUpBuffers");
-        return fn();
-    }
-
-    public int RTT_GetBufDesc(int channel, int up, ref JLinkRttBufDesc desc)
-    {
-        var fn = GetDelegate<JLINKARM_RTT_GetBufDescDelegate>("JLINKARM_RTT_GetBufDesc");
-        return fn(channel, up, ref desc);
+        if (_open)
+            Close();
     }
 
     #endregion
@@ -473,6 +438,7 @@ public sealed class DllLoader : IDisposable
     {
         if (!_disposed && _dllHandle != IntPtr.Zero)
         {
+            try { Close(); } catch { }
             FreeLibrary(_dllHandle);
             _dllHandle = IntPtr.Zero;
             _disposed = true;
