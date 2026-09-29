@@ -630,6 +630,9 @@ public class IntelHex
 {
     private readonly Dictionary<int, byte> _data = new();
 
+    /// <summary>扩展线性地址记录（type 04）设置的地址高 16 位。</summary>
+    private uint _upperAddr;
+
     public int Count => _data.Count;
     public int MinAddr => _data.Count > 0 ? _data.Keys.Min() : 0;
     public int MaxAddr => _data.Count > 0 ? _data.Keys.Max() : 0;
@@ -638,6 +641,7 @@ public class IntelHex
     public void LoadHex(string path)
     {
         _data.Clear();
+        _upperAddr = 0;
         var lines = File.ReadAllLines(path);
         foreach (var line in lines)
         {
@@ -763,7 +767,7 @@ public class IntelHex
             if (!line.StartsWith(":")) return;
 
             // Format: :LLAAAATT[DD...]CC
-            // LL = byte count, AAAA = address, TT = type, DD = data, CC = checksum
+            // LL = byte count, AAAA = 低16位地址, TT = type, DD = data, CC = checksum
             string hex = line.Substring(1); // Remove leading ':'
             if (hex.Length < 8) return;
 
@@ -771,19 +775,34 @@ public class IntelHex
             int address = Convert.ToInt32(hex.Substring(2, 4), 16);
             int recordType = Convert.ToInt32(hex.Substring(6, 2), 16);
 
-            if (recordType == 0) // Data record
+            switch (recordType)
             {
-                int dataStart = 8;
-                for (int i = 0; i < byteCount && dataStart + 2 + i * 2 < hex.Length; i++)
+                case 0: // 数据记录：绝对地址 = type 04 设置的高 16 位 + 记录内低 16 位
                 {
-                    string byteStr = hex.Substring(dataStart + i * 2, 2);
-                    int addr = address + i;
-                    byte val = Convert.ToByte(byteStr, 16);
-                    _data[addr] = val;
+                    int dataStart = 8;
+                    int addr = (int)(_upperAddr | (uint)address);
+                    for (int i = 0; i < byteCount && dataStart + 2 + i * 2 < hex.Length; i++)
+                    {
+                        string byteStr = hex.Substring(dataStart + i * 2, 2);
+                        byte val = Convert.ToByte(byteStr, 16);
+                        _data[addr + i] = val;
+                    }
+                    break;
                 }
+                case 1: // EOF
+                    break;
+                case 4: // 扩展线性地址：数据两字节为后续记录的地址高 16 位
+                {
+                    if (hex.Length >= 12)
+                    {
+                        byte hi = Convert.ToByte(hex.Substring(8, 2), 16);
+                        byte lo = Convert.ToByte(hex.Substring(10, 2), 16);
+                        _upperAddr = (uint)((hi << 8) | lo) << 16;
+                    }
+                    break;
+                }
+                // type 02（扩展段地址，罕见格式）与其他类型忽略（见更新日志"其他"）
             }
-            // Extended linear address (type 4) and others are skipped for simplicity
-            // but could be implemented for full support
         }
         catch { }
     }
