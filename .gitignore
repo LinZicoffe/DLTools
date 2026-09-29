@@ -1,0 +1,12 @@
+# 构建产物
+bin/
+obj/
+
+# IDE / 工具缓存
+.vs/
+.mimosa/
+*.user
+*.suo
+
+# Windows 保留名残留文件（历史误创建）
+nul
