@@ -212,7 +212,7 @@ public class FlashParams
     public string DeviceName { get; set; } = "";
     public string Interface { get; set; } = "SWD";
     public int SpeedKhz { get; set; } = 4000;
-    public string EraseMode { get; set; } = "chip";
+    public string EraseMode { get; set; } = "sector";
     public string PostAction { get; set; } = "reset_run";
     public bool ExtraVerify { get; set; } = false;
     public string Serial { get; set; } = "";

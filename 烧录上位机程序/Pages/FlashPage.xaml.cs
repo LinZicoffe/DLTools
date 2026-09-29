@@ -55,7 +55,7 @@ public partial class FlashPage : BasePage
             FilePath = FilePathBox.Text.Trim(),
             FileFormat = Path.GetExtension(FilePathBox.Text).ToLower().TrimStart('.'),
             BinStartAddr = 0,
-            EraseMode = EraseChip.IsChecked == true ? "chip" : "sector",
+            EraseMode = EraseChip.IsChecked == true ? JLinkBackend.EraseModeChip : JLinkBackend.EraseModeSector,
             PostAction = GetPostAction(),
             ExtraVerify = ExtraVerifyCheckBox.IsChecked == true,
             Serial = SerialBox.Text.Trim(),

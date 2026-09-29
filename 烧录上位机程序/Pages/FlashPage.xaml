@@ -1,4 +1,5 @@
 <local:BasePage x:Class="烧录上位机程序.Pages.FlashPage"
+                 Title="固件烧录"
                  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                  xmlns:local="clr-namespace:烧录上位机程序.Pages">
@@ -17,6 +18,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
@@ -39,7 +41,7 @@
                 <TextBlock Grid.Row="1" Grid.Column="2" Text="kHz" VerticalAlignment="Center" Margin="4"/>
 
                 <TextBlock Grid.Row="1" Grid.Column="3" Text="序列号:" VerticalAlignment="Center" Margin="4"/>
-                <TextBox Grid.Row="1" Grid.Column="3" x:Name="SerialBox" Width="120" Margin="4"/>
+                <TextBox Grid.Row="1" Grid.Column="4" x:Name="SerialBox" Width="120" Margin="4"/>
             </Grid>
         </GroupBox>
 
@@ -69,8 +71,10 @@
                 </Grid.ColumnDefinitions>
 
                 <TextBlock Grid.Column="0" Text="擦除模式:" VerticalAlignment="Center" Margin="4"/>
-                <RadioButton Grid.Column="1" Content="整片擦除" GroupName="EraseMode" IsChecked="True" Margin="4" x:Name="EraseChip"/>
-                <RadioButton Grid.Column="2" Content="扇区擦除" GroupName="EraseMode" Margin="4"/>
+                <RadioButton Grid.Column="1" Content="整片擦除" GroupName="EraseMode" Margin="4" x:Name="EraseChip"
+                             ToolTip="擦除整个芯片全部 Flash（含 bootloader 区域），确认目标无需保留内容时再用"/>
+                <RadioButton Grid.Column="2" Content="扇区擦除" GroupName="EraseMode" IsChecked="True" Margin="4" x:Name="EraseSector"
+                             ToolTip="只擦除固件覆盖的扇区（默认，保护 bootloader）"/>
 
                 <TextBlock Grid.Column="3" Text="完成后动作:" VerticalAlignment="Center" Margin="4"/>
                 <RadioButton Grid.Column="4" Content="复位运行" GroupName="PostAction" IsChecked="True" Margin="4" x:Name="ResetRunRadio"/>

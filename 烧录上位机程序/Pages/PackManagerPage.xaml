@@ -1,4 +1,5 @@
 <local:BasePage x:Class="烧录上位机程序.Pages.PackManagerPage"
+                Title="Pack 管理"
                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                 xmlns:local="clr-namespace:烧录上位机程序.Pages">

@@ -20,9 +20,9 @@ public partial class MainWindowViewModel : ObservableObject
         _config = ConfigService.Instance;
         Pages = new ObservableCollection<BasePage>
         {
+            new FlashPage(),
             new RttMonitorPage(),
             new MemoryViewerPage(),
-            new FlashPage(),
             new PackManagerPage(),
             new SettingsPage(),
             new AboutPage()
@@ -31,16 +31,9 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     [ObservableProperty]
-    private BasePage _currentPage = new RttMonitorPage();
+    private BasePage? _currentPage;
 
     public ObservableCollection<BasePage> Pages { get; }
-
-    [RelayCommand]
-    private void NavigateTo(int index)
-    {
-        if (index >= 0 && index < Pages.Count)
-            CurrentPage = Pages[index];
-    }
 
     [RelayCommand]
     private void SwitchLanguage(string lang)

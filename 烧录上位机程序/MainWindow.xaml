@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:烧录上位机程序"
         mc:Ignorable="d"
-        Title="J-Link RTT Viewer"
+        Title="J-Link 烧录上位机"
         Width="1280" Height="800"
         MinWidth="480" MinHeight="540">
     <Grid>
@@ -15,15 +15,30 @@
         </Grid.RowDefinitions>
 
         <!-- 顶部工具栏 -->
-        <StackPanel Grid.Row="0" Orientation="Horizontal"
-                    Background="{DynamicResource SystemBaseLowColor}"
-                    Height="48"
-                    VerticalAlignment="Center">
-            <TextBlock Text="J-Link RTT Viewer"
+        <DockPanel Grid.Row="0" Background="{DynamicResource SystemBaseLowColor}" MinHeight="48" LastChildFill="False">
+            <TextBlock DockPanel.Dock="Left" Text="J-Link 烧录上位机"
                        FontSize="16" FontWeight="Bold"
                        VerticalAlignment="Center" Margin="8,0"/>
-            <Separator VerticalAlignment="Center" Height="24"/>
-            <ComboBox x:Name="LanguageCombo"
+
+            <!-- 页面导航 -->
+            <ListBox DockPanel.Dock="Left"
+                     ItemsSource="{Binding Pages}"
+                     SelectedItem="{Binding CurrentPage}"
+                     Background="Transparent" BorderThickness="0"
+                     VerticalAlignment="Center" Margin="16,0,0,0">
+                <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal"/>
+                    </ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding Title}" Margin="10,6" FontSize="13"/>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <ComboBox DockPanel.Dock="Right" x:Name="LanguageCombo"
                       Width="120" Margin="8,0"
                       VerticalAlignment="Center"
                       SelectionChanged="LanguageCombo_SelectionChanged">
@@ -34,7 +49,7 @@
                 <ComboBoxItem Content="English" Tag="en"/>
                 <ComboBoxItem Content="Français" Tag="fr"/>
             </ComboBox>
-        </StackPanel>
+        </DockPanel>
 
         <!-- 内容区 -->
         <ContentControl Grid.Row="1" Content="{Binding CurrentPage}"/>
