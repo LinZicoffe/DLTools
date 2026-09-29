@@ -145,17 +145,18 @@ public sealed class DllLoader : IDisposable
 
     public static string? FindDllPath()
     {
+        // 官方安装目录优先：IAR 等工具链捆绑的 JLink DLL 版本常较旧，
+        // 若排在前面会被静默优先选用
         var candidates = new[]
         {
-            null,
-            @"C:\iar\ewarm-9.60.4\arm\bin\JLink_x64.dll",
             @"C:\Program Files\SEGGER\JLinkARM_DLL\JLink_x64.dll",
             @"C:\Program Files (x86)\SEGGER\JLinkARM_DLL\JLink_x64.dll",
+            @"C:\iar\ewarm-9.60.4\arm\bin\JLink_x64.dll",
         };
 
         foreach (var candidate in candidates)
         {
-            if (candidate != null && File.Exists(candidate))
+            if (File.Exists(candidate))
                 return candidate;
         }
 

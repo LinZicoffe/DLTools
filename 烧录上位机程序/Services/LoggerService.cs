@@ -1,13 +1,15 @@
 using System;
 using System.IO;
-using System.Windows;
+using System.Threading;
 
 namespace 烧录上位机程序.Services;
 
 public static class LoggerService
 {
     private static readonly string LogDir;
+    private static readonly object _lock = new();
     private static StreamWriter? _logWriter;
+    private static string _currentDate = "";
 
     static LoggerService()
     {
@@ -26,10 +28,21 @@ public static class LoggerService
     {
         try
         {
-            var date = DateTime.Now.ToString("yyyyMMdd");
-            var logFile = Path.Combine(LogDir, $"rtt_{date}.log");
-            _logWriter ??= new StreamWriter(logFile, true) { AutoFlush = true };
-            _logWriter.WriteLine($"[{DateTime.Now:HH:mm:ss}] [{level}] {message}");
+            // 全局异常钩子注册后，任意线程都可能写日志：串行化写入
+            lock (_lock)
+            {
+                var date = DateTime.Now.ToString("yyyyMMdd");
+                // 跨天时切换到新日志文件（此前 writer 只在首次创建，日期变量算了不用，
+                // 跨零点后所有日志仍写进前一天文件）
+                if (_logWriter == null || date != _currentDate)
+                {
+                    _logWriter?.Dispose();
+                    var logFile = Path.Combine(LogDir, $"rtt_{date}.log");
+                    _logWriter = new StreamWriter(logFile, true) { AutoFlush = true };
+                    _currentDate = date;
+                }
+                _logWriter.WriteLine($"[{DateTime.Now:HH:mm:ss}] [{level}] {message}");
+            }
         }
         catch { }
     }
