@@ -642,13 +642,25 @@ public class IntelHex
         _data.Clear();
         _upperAddr = 0;
         _segmentBase = 0;
-        var lines = File.ReadAllLines(path);
-        for (int lineNo = 0; lineNo < lines.Length; lineNo++)
+        bool sawEof = false;
+        int lineNo = 0;
+        // 流式逐行读取，避免大固件整文件预读导致内存驻留翻倍
+        using var reader = new StreamReader(path);
+        string? line;
+        while ((line = reader.ReadLine()) != null)
         {
-            var line = lines[lineNo];
+            lineNo++;
             if (string.IsNullOrWhiteSpace(line) || !line.StartsWith(":")) continue;
-            ParseHexLine(line, lineNo + 1);
+            if (!ParseHexLine(line, lineNo))
+            {
+                sawEof = true;
+                break;
+            }
         }
+        // 缺少 EOF 记录说明文件在行边界被截断：每一行校验和都各自合法，
+        // 若放行会烧出"半份固件"且用同一截断文件校验必然通过（静默数据完整性缺陷）
+        if (!sawEof)
+            throw new FileParseError("HEX 文件缺少 EOF 记录，文件可能被截断或不完整");
     }
 
     public void FromBytes(byte[] bytes, int offset)
@@ -709,43 +721,42 @@ public class IntelHex
     public void WriteHexFile(string path)
     {
         var sb = new System.Text.StringBuilder();
-        int min = MinAddr, max = MaxAddr;
-        int addr = min;
-        while (addr <= max)
+        int currentUpper = -1;
+        // 按 GetSegments 输出真实存在的数据段，地址空洞不填充 0xFF（否则空洞被固化成真实数据）
+        foreach (var (segStart, segEnd) in GetSegments())
         {
-            // Collect up to 16 bytes per line
-            int count = Math.Min(16, max - addr + 1);
-            // Check if data exists for these addresses
-            bool allEmpty = true;
-            for (int i = 0; i < count; i++)
+            int addr = segStart;
+            while (addr < segEnd)
             {
-                if (_data.ContainsKey(addr + i)) { allEmpty = false; break; }
-            }
-            if (allEmpty)
-            {
+                // 地址高 16 位变化时先输出扩展线性地址记录（type 04），
+                // 否则行内地址字段只有 16 位，高于 0xFFFF 的数据会回绕重叠
+                int upper = addr >> 16;
+                if (upper != currentUpper)
+                {
+                    currentUpper = upper;
+                    int ulbaSum = 2 + 0 + 0 + 4 + ((currentUpper >> 8) & 0xFF) + (currentUpper & 0xFF);
+                    ulbaSum = (~ulbaSum + 1) & 0xFF;
+                    sb.AppendLine($":02000004{currentUpper:X4}{ulbaSum:X2}");
+                }
+                // 一行最多 16 字节，且不跨 64K 边界（跨界需先输出新的 ULBA 记录）
+                int count = Math.Min(16, Math.Min(segEnd - addr, 0x10000 - (addr & 0xFFFF)));
+                int checksum = count + ((addr >> 8) & 0xFF) + (addr & 0xFF);
+                var line = new System.Text.StringBuilder();
+                line.Append(':');
+                line.Append(count.ToString("X2"));
+                line.Append((addr & 0xFFFF).ToString("X4"));
+                line.Append("00"); // record type = data
+                for (int i = 0; i < count; i++)
+                {
+                    byte b = _data[addr + i];
+                    line.Append(b.ToString("X2"));
+                    checksum += b;
+                }
+                checksum = (~checksum + 1) & 0xFF;
+                line.Append(checksum.ToString("X2"));
+                sb.AppendLine(line.ToString());
                 addr += count;
-                continue;
             }
-
-            var line = new System.Text.StringBuilder();
-            line.Append(':');
-            int byteCount = count;
-            line.Append(byteCount.ToString("X2"));
-            line.Append(((ushort)addr).ToString("X4"));
-            line.Append("00"); // record type = data
-
-            int checksum = byteCount + ((ushort)addr & 0xFF) + (((ushort)addr >> 8) & 0xFF);
-            for (int i = 0; i < count; i++)
-            {
-                byte b = _data.TryGetValue(addr + i, out byte val) ? val : (byte)0xFF;
-                line.Append(b.ToString("X2"));
-                checksum += b;
-            }
-            checksum = (~checksum + 1) & 0xFF;
-            line.Append(checksum.ToString("X2"));
-
-            sb.AppendLine(line.ToString());
-            addr += count;
         }
 
         // EOF record
@@ -762,7 +773,8 @@ public class IntelHex
     /// <summary>扩展段地址记录（type 02）设置的段基址（值 × 16）。</summary>
     private uint _segmentBase;
 
-    private void ParseHexLine(string line, int lineNo)
+    /// <summary>解析一行记录；返回 false 表示遇到 EOF 记录，调用方应停止解析后续行。</summary>
+    private bool ParseHexLine(string line, int lineNo)
     {
         // 格式 :LLAAAATT[DD...]CC；整行（去掉 ':'）所有字节之和 mod 256 必须为 0
         string hex = line.Trim().Substring(1);
@@ -789,22 +801,29 @@ public class IntelHex
 
         switch (recordType)
         {
-            case 0: // 数据记录：绝对地址 = 线性基址（type 04）+ 段基址（type 02）+ 记录内 16 位偏移
+            case 0: // 数据记录：绝对地址 = 当前生效基址（type 04 线性 / type 02 分段二选一）+ 记录内 16 位偏移
             {
                 int addr = (int)(_upperAddr + _segmentBase + (uint)address);
                 for (int i = 0; i < byteCount; i++)
                     _data[addr + i] = recBytes[4 + i];
                 break;
             }
-            case 1: // EOF
-                break;
+            case 1: // EOF：规范要求必须是最后一行
+                return false;
             case 2: // 扩展段地址：数据两字节 × 16 为段基址
+                if (byteCount != 2)
+                    throw new FileParseError($"HEX 第 {lineNo} 行扩展段地址记录数据长度必须为 2 字节：{line}");
                 _segmentBase = (uint)((recBytes[4] << 8) | recBytes[5]) << 4;
+                _upperAddr = 0; // 分段寻址与线性寻址互斥，切换时另一基址失效
                 break;
             case 4: // 扩展线性地址：数据两字节为后续记录的地址高 16 位
+                if (byteCount != 2)
+                    throw new FileParseError($"HEX 第 {lineNo} 行扩展线性地址记录数据长度必须为 2 字节：{line}");
                 _upperAddr = (uint)((recBytes[4] << 8) | recBytes[5]) << 16;
+                _segmentBase = 0;
                 break;
             // type 03/05（启动地址）等不影响数据寻址，忽略
         }
+        return true;
     }
 }
