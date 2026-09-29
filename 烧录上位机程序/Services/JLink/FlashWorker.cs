@@ -17,6 +17,10 @@ namespace 烧录上位机程序.Services.JLink;
 public partial class FlashWorker : ObservableObject
 {
     private CancellationTokenSource? _cts;
+    private Task? _currentTask;
+
+    /// <summary>当前烧录任务；关窗流程等待其安全退出，避免进程在原生调用中途被杀。</summary>
+    public Task? CurrentTask => _currentTask;
 
     public FlashWorker()
     {
@@ -59,7 +63,7 @@ public partial class FlashWorker : ObservableObject
         ProgressValue = 0;
         Logs.Clear();
         _cts = new CancellationTokenSource();
-        _ = Task.Run(() => RunFlashAsync(p, _cts.Token));
+        _currentTask = Task.Run(() => RunFlash(p, _cts.Token));
     }
 
     public void StopFlash()
@@ -74,7 +78,7 @@ public partial class FlashWorker : ObservableObject
 
     #region Flash Workflow
 
-    private async Task RunFlashAsync(FlashParams p, CancellationToken ct)
+    private void RunFlash(FlashParams p, CancellationToken ct)
     {
         JLinkBackend? backend = null;
         try

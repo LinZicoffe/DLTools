@@ -22,6 +22,15 @@ public partial class FlashPage : BasePage
         DataContext = _worker;
     }
 
+    /// <summary>烧录是否进行中（供主窗口关窗确认流程使用）。</summary>
+    public bool IsFlashBusy => _worker?.IsBusy ?? false;
+
+    /// <summary>当前烧录任务，供关窗流程等待安全退出。</summary>
+    public Task? FlashTask => _worker?.CurrentTask;
+
+    /// <summary>请求停止当前烧录（在段/校验块边界生效）。</summary>
+    public void RequestStopFlash() => _worker?.StopFlash();
+
     private void BrowseFile_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFileDialog

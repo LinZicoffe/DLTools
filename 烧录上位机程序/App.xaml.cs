@@ -11,6 +11,24 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // 全局异常兜底：任何未处理异常先落日志，避免静默崩溃、现场无从排查
+        DispatcherUnhandledException += (s, args) =>
+        {
+            try { LoggerService.Error($"UI 线程未处理异常: {args.Exception}"); } catch { }
+            MessageBox.Show($"发生未处理的错误：\n\n{args.Exception.Message}\n\n详情已写入日志。",
+                "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            args.Handled = true;
+        };
+        AppDomain.CurrentDomain.UnhandledException += (s, args) =>
+        {
+            try { LoggerService.Error($"未处理异常(非UI线程): {args.ExceptionObject}"); } catch { }
+        };
+        TaskScheduler.UnobservedTaskException += (s, args) =>
+        {
+            try { LoggerService.Error($"未观察的Task异常: {args.Exception}"); } catch { }
+            args.SetObserved();
+        };
+
         System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
 
         try
