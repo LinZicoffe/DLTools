@@ -11,3 +11,6 @@ TestResults/
 
 # Windows 保留名残留文件（历史误创建）
 nul
+
+# 用户实测打包输出目录
+Output/
