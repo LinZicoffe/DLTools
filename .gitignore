@@ -1,6 +1,7 @@
 # 构建产物
 bin/
 obj/
+TestResults/
 
 # IDE / 工具缓存
 .vs/

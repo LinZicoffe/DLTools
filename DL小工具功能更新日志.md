@@ -22,20 +22,36 @@
 | P05 | 两条构建链和两种安装模式编排 | Services/Packaging/PackagingService | 已完成 |
 | P06 | 打包页完整交互 | Pages、ViewModels | 已完成 |
 | R1 | 修正安装名称引号保真并验证安装生命周期 | InstallerTemplateBuilder、InstallerLifecycleTests | 已完成 |
-| P07 | 回归/文档/三路最终审查 | tests、docs、README、AGENTS | 未开始 |
+| P07 | 回归、文档与交付验证 | tests、docs、README、AGENTS | 已完成 |
+
+## 最终全项目审查
+
+尚未开始。全部开发待办完成后，由三个全新Reviewer分别检查需求完整性、代码架构、风险与测试；通过后才记录开发完成。
 
 ## 已知风险
 
-- P07安装发现的Setup引号显示问题已由R1修复并审查通过；跨进程/管道测试草稿继续留待P07提交。
+- P07安装发现的Setup引号显示问题已由R1修复并审查通过；跨进程、管道压力及真实CPU测试已通过独立审查。
 
 1. 真机烧录、干净目标机安装和缩放验收尚未执行，开发期间逐项记录。
 2. Framework入口输出和已有脚本Source输入非空时，需要产品界面明确确认及备份；恢复失败必须可定位。
 
 ## 其他
 
-- .zcodeignore、打包教程.md保留未跟踪；AGENTS按计划最终更新。
+- .zcodeignore、打包教程.md保留未跟踪；AGENTS已按计划更新为Repository Guidelines并纳入P07。
 
 ## 更新记录
+
+### 2026年10月15日（更新9）
+
+**更新内容**：补充真实跨进程恢复注册竞争、双流大输出及现代x86/Framework x86/x64产物架构和入口验证；更新README、343词AGENTS及构建/安装/UI/现场分开的验收记录，忽略TestResults。
+
+**涉及位置**：tests、README、AGENTS、.gitignore、验收与评审记录。
+
+**对应待办**：P07。
+
+**审查结果**：通过（第1轮），无阻塞；Release零警告错误，双开关全量119/119零跳过，独立压力/跨进程2/2通过并核对最终TRX。现场硬件、干净目标机和150%缩放仍未验收；最终三路项目审查尚待执行。
+
+**Git Commit**：feat(P07): complete packaging regression and contributor documentation
 
 ### 2026年10月15日（更新8）
 
@@ -47,7 +63,7 @@
 
 **审查结果**：通过（第1轮），无阻塞；生命周期+模板7/7零跳过，独立真实模板6/6零跳过，构建零警告。跨进程/管道草稿未纳入本提交。
 
-**Git Commit**：feat(R1): preserve literal setup metadata and verify installer lifecycle
+**Git Commit**：feat(R1): preserve literal setup metadata and verify installer lifecycle（15244d1）
 
 
 ### 2026年10月15日（更新7）

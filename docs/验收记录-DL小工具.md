@@ -30,7 +30,7 @@
 
 本次尚未执行 J-Link/STM32 真机烧录回归、干净目标机的运行时依赖安装验证及指定150%缩放验收。历史版本的硬件通过记录不能替代本次回归。
 
-真实安装、同AppId升级、卸载保留用户数据及最终完整自动测试将在P07补记。
+真实安装、同AppId升级及卸载保留用户数据已于R1补记；最终自动测试由P07汇总。指定150%缩放和现场硬件边界继续未验收。
 
 ## R1 真实安装生命周期（2026-10-15）
 
@@ -43,3 +43,23 @@
 - 首次失败捕获安装名重复双引号，R1修复后保持原断言重跑通过；不是放宽验收条件。
 
 本机已具备开发SDK/运行时，不能据此证明干净目标机上的依赖运行时部署通过。原现场边界继续未验收。
+
+## P07 自动化与脚本兼容验证（2026-10-15）
+
+- 工具环境：SDK8.0.418/9.0.311、VS MSBuild17.14、Framework4.8 Developer Pack、Inno Setup6.7.1及ChineseSimplified.isl。
+- `dotnet build DL小工具.sln -c Release --no-restore`：0警告、0错误。
+- 最终双开关完整测试：119/119通过、0失败、0跳过，耗时2分14秒，含新增CPU架构检查及真实安装生命周期；本地TRX为`tests/DLTools.Tests/TestResults/P07-final-full-validation.trx`，不纳入Git。补CPU前的117/117阶段记录仍保留。
+- 真实构建矩阵：.NET8 WPF、.NET9 WinForms独立部署、传统Framework4.8 WPF/Forms及SDK格式net48；解决方案条件TargetDir、外部引用x86映射、多目标框架及条件导入通过。
+- 失败/取消矩阵：还原/构建/ISCC/最终保存失败、父退出子持锁、恢复失败屏障、旧包保护、跨卷保存及资源冲突/链接通过。
+- 两个真实进程在ready屏障后同时注册嵌套恢复目标，仅一方成功；记录持有至release，结束后无恢复记录残留。
+- 双流压力每流4096行×256汉字，约6.3MB，逐行核对stdout/stderr无丢失、无死锁。
+- CPU补充实测2/2零跳过：现代.NET8固定x86发布及收集入口均为原生I386 apphost；Framework固定x86/x64的原入口及收集产物PE架构正确，x86带Requires32Bit，两种入口均实际启动成功，运行时XML保留。记录为`tests/DLTools.Tests/TestResults/p07-cpu-validation.trx`。
+- R1生命周期在完整测试中再次执行通过，验证应用已卸载；未安装业务UDP应用。
+
+### 教程脚本的原规则
+
+只读核对教程指向的实际脚本：`D:/C#_text/WPF/UDP-数据采集系统-交付版 -UI升级/setup.iss`。AppId仍为`{2748AB67-35B7-4A87-874E-EC881B4418CF}`；授权使用LOCALAPPDATA/ADC_Client/license.txt，通过[Files]安装为{app}/license.txt；原升级、图标及卸载规则保持由脚本管理。
+
+在独占临时目录用受控构建输入验证脚本副本，仅将授权路径改成不存在的missing-required-license.txt。Inno退出2，并明确提示第117行Source文件不存在，未生成最终包。此验证不等于实际UDP业务项目构建/安装验收，未执行其程序。原脚本前后SHA-256均为`5082647EC8D9C2DE7F05A5E48927E6B9278130822A76E6ADE2D11345B70545B5`。
+
+诊断目录：`%LOCALAPPDATA%/Temp/DLTools-TutorialCompatibility-7ad40aaced6748e7bdf59f725b887120`。首次测试夹具未成功替换CRLF行而编译成功，已删除该自有临时EXE；修正夹具后保持缺授权即失败的断言通过。没有打印授权文件内容，原脚本及授权文件未修改。

@@ -1,97 +1,103 @@
-# J-Link 烧录上位机（C# WPF）
+# DL小工具
 
-> C# WPF 复刻自 Python/PySide6 版本的 SEGGER J-Link 固件烧录工具，**只做固件烧录**（RTT/内存查看等页面已按需求裁剪）。
-> 已真机实测通过：J-Link + STM32H750VB，SWD 4000 kHz，烧录 → 强制读回校验 → 复位运行全链路。
+C# / .NET 8 / WPF 的常用工具集合。左侧选择“固件烧录”或“项目打包”，右侧保留对应页面的输入、进度和日志。默认进入烧录页；窗口默认1280×800，最小1000×700，表单可滚动。
 
-## 功能特性
+## 固件烧录
 
-- **固件格式**：`.elf` / `.axf`（ELF32 LOAD 段）、`.hex`（Intel HEX）、`.bin`（需填写烧录起始地址，如 `0x08000000`）
-- **连接参数**：目标设备名（SEGGER 官方命名）、SWD/JTAG、下载速度、J-Link 序列号（留空自动选第一个）
-- **擦除模式**：整片擦除 / 扇区擦除（默认，下载事务内按扇区隐式擦除，保护 bootloader）
-- **强制读回校验**：烧录完成后自动读回 Flash 与固件文件逐字节比对（4096 字节分块），不一致即报失败——DLL 层不报错不代表数据真的落进了 Flash
-- **完成后动作**：复位运行 / 复位暂停 / 仅烧录
-- **HEX 解析完整性防护**：逐行校验和验证、强制 EOF 记录（截断文件直接拒绝）、type 02/04 记录长度与互斥校验、空洞地址不固化
-- **安全关窗**：烧录进行中关窗会弹窗确认，停止任务并等待其退出（15s 超时）后再关闭，避免进程在原生调用中途被杀导致芯片半擦除/半写入
-- **全局异常兜底**：UI 线程 / AppDomain / 未观察 Task 三类未处理异常统一写日志
-- **界面文案资源化**：XAML 经 `{i18n:Loc 'key'}` 标记扩展绑定（界面固定简体中文，语言切换入口已移除）
-- **配置持久化**：`%APPDATA%\JLinkRTTViewer\user_prefs.json`，防抖落盘 + 临时文件原子替换，退出时强制 Flush
+- 支持`.elf` / `.axf`（ELF32 LOAD段）、`.hex`（Intel HEX）和`.bin`（需填写起始地址）。
+- 配置目标设备、SWD/JTAG、速度和J-Link序列号；支持整片/扇区擦除及完成后的复位动作。
+- 烧录后强制按4096字节分块读回比对，保持HEX校验和、EOF和稀疏地址校验。
+- 开始烧录时才加载J-Link；缺少驱动不影响打开程序和项目打包。
 
-## 技术栈
+流程：Connect → 可选整片擦除 → 按段halt/BeginDownload/WriteMem/EndDownload → 强制Verify → 可选Reset → Close。取消保留原来的段/校验块边界；关窗确认停止后最多等待15秒。
 
-| 组件 | 选型 |
-|------|------|
-| UI 框架 | WPF + **WPF-UI 3.1.0**（Fluent 2 风格控件） |
-| MVVM | **CommunityToolkit.Mvvm 8.2.2**（源生成器 `[ObservableProperty]`） |
-| 后端 | C# P/Invoke 直调 `JLink_x64.dll`（实测 V9.76，不依赖 pylink） |
-| .NET | 8.0（`net8.0-windows`，**PlatformTarget=x64**） |
-| 图标 | Material.Icons.WPF |
+## 项目打包
 
-## 项目结构
+1. 导入本地文件夹、`.sln`或C# `.csproj`，点击“识别”。多个入口/目标框架时手动选择候选。
+2. 查看WPF/WinForms、.NET版本、构建配置、项目平台、CPU、入口EXE和识别依据。直接项目修改配置/平台后需重新评估；解决方案采用候选对应的ActiveCfg映射。
+3. 指定输出目录、安装包文件名、部署架构及模式。默认独立部署，可改为依赖目标机Desktop Runtime；Framework沿用项目CPU并显示运行时要求。
+4. 开始打包，查看实际阶段和实时日志；支持取消，成功后可打开输出目录或完整日志。
 
+安装包文件名、安装后的应用名称和目标EXE独立处理。更改包名不会重命名程序入口，也不会改变项目的稳定AppId。
+
+### 支持范围与工具
+
+| 项目/操作 | 要求 |
+|---|---|
+| 工具自身运行 | Windows 10/11 x64，.NET 8 Desktop Runtime |
+| 工具自身开发 | .NET 8或兼容更新SDK |
+| 现代.NET WPF/WinForms | 对应SDK，MSBuild17.8+；发布win-x86/win-x64，遵守项目CPU/RID约束 |
+| 传统/SDK格式Framework WPF/WinForms | Visual Studio MSBuild17.8+及对应Developer Pack；支持x86/x64/AnyCPU |
+| 安装包编译 | Inno Setup6+；自动模板还需Languages/ChineseSimplified.isl |
+| 固件烧录 | SEGGER驱动与JLink_x64.dll |
+
+可在“构建工具与路径设置”中自动定位、手动指定及检查dotnet、MSBuild和ISCC。ARM64、其他技术栈、ZIP导入和MSI不在首版范围内。
+
+### 自动生成模板
+
+读取项目名称、版本及图标，允许修改，缺少版本默认1.0.0。默认包名为`<应用名>_v<版本>_Setup.exe`。支持额外文件/目录映射到安装目录下的相对位置；目录目标`.`表示合并安装根，文件目标须包含文件名。越界、链接和重名冲突会拒绝。
+
+默认当前用户安装，提供开始菜单、可选桌面快捷方式、卸载和安装后启动。稳定AppId按完整项目路径保存；升级时保持该值。模板不添加递归删除用户数据的卸载规则。
+
+### 使用已有脚本
+
+选择原`.iss`及其实际读取的构建输入目录；现代项目通常为脚本旁`Publish`，Framework可用正常TargetDir。工具先构建，再准备输入并编译原脚本；原脚本的AppId、授权、图标、安装及卸载规则继续生效。通用应用信息和额外资源控件在此模式下禁用。
+
+输入路径必须与脚本Source/宏匹配，工具不推断自定义宏。脚本须支持ISPP有效规则检查；builtin预处理器和无法导出规则的脚本会明确拒绝。首版只输出独立单EXE安装包，拒绝分卷、external、下载及安装包旁附属文件依赖。编译器参数控制输出目录和包名；不会改写原脚本。工具不主动读取授权文件内容写入日志；私密预处理文本会删除且不入日志。
+
+### 任务与文件恢复
+
+全局一次执行一个烧录或项目任务，切页不会释放运行资格；打包关窗会等进程退出和目录恢复，不使用烧录的15秒上限。退出问题与打包覆盖问题按顺序显示。
+
+现代.NET发布到本次任务的独占目录；Framework先确认备份入口正常输出目录，再还原/重新构建并整目录收集。保留运行时、原生库、语言资源、XML/JSON，只过滤调试产物。已有脚本的非空输入目录同样需要确认备份。成功后保留旧目录备份；失败或取消恢复旧输入和旧安装包，部分输出另存保留。
+
+安装包先在目标卷暂存并校验，再原子提交；覆盖同名包需要确认。恢复异常会显示备份及记录位置，阻止相关父子目录重试。应先按记录恢复文件，再处理相应恢复记录，避免绕过保护。保留的任务产物和备份需按需人工归档。
+
+## 构建与测试
+
+在仓库根目录使用PowerShell：
+
+```powershell
+dotnet restore "DL小工具.sln"
+dotnet build "DL小工具.sln" -c Release
+dotnet run --project "烧录上位机程序/DL小工具.csproj"
+dotnet test "tests/DLTools.Tests/DLTools.Tests.csproj" -c Release
 ```
+
+普通测试不执行实际安装，项目识别用例也会调用实际SDK、VS MSBuild17.8+并检查Framework4.8开发包。完整发布/安装集成检查需本机SDK8/9、Framework4.8开发包、VS MSBuild和Inno：
+
+```powershell
+$env:DLTOOLS_INTEGRATION = '1'
+$env:DLTOOLS_INSTALL_INTEGRATION = '1' # 允许测试独立安装、升级和卸载临时验证应用
+dotnet test "tests/DLTools.Tests/DLTools.Tests.csproj" -c Release
+```
+
+安装测试只使用独占临时目录和新AppId，不使用真实业务应用标识。安装、GUI及硬件边界见[验收记录](docs/验收记录-DL小工具.md)。
+
+## 目录与本地配置
+
+```text
+DL小工具.sln
 烧录上位机程序/
-├── App.xaml(.cs)             # 启动：DLL 加载、全局异常钩子、退出 Flush
-├── MainWindow.xaml(.cs)      # 主窗口：ui:TitleBar（最小化/最大化/关闭）+ 关窗安全流程
-├── Pages/
-│   ├── BasePage.cs           # 页面基类（XAML 根元素）
-│   └── FlashPage.xaml(.cs)   # 固件烧录页（唯一功能页）
-├── ViewModels/
-│   └── MainWindowViewModel.cs
-├── Models/
-│   ├── FlashFileParser.cs    # ELF32/Intel HEX/bin 解析（纯函数、零 UI 依赖）
-│   └── ProbeParams.cs        # 探测器连接参数
-├── Services/
-│   ├── ConfigService.cs      # 配置读写（防抖 + 原子落盘）
-│   ├── I18nService.cs        # 翻译加载（六语言 JSON）
-│   ├── LocExtension.cs       # {i18n:Loc 'key'} 标记扩展 + INPC 绑定源
-│   ├── LoggerService.cs      # 按天滚动日志（跨天切文件、共享读）
-│   └── JLink/
-│       ├── DllLoader.cs      # DLL 定位/加载 + P/Invoke 声明与导出封装
-│       ├── JLinkBackend.cs   # 烧录后端：Connect/Erase/Program/Verify/Reset/Close
-│       └── FlashWorker.cs    # 后台任务编排：阶段事件 + 取消 + 关窗等待
-└── Resources/
-    ├── UiStyles.xaml         # 画刷与控件样式
-    └── i18n/*.json           # 六语言词条（五语 490 key 完全对齐；zh_CN 走 key 回退）
+  DL小工具.csproj          # net8.0-windows / WPF / x64
+  Pages/                  # 烧录页、打包页
+  ViewModels/             # 页面状态与命令
+  Models/Packaging/       # 识别结果与打包选项
+  Services/Packaging/     # 构建、Job进程、事务、Inno、profiles
+  Services/JLink/         # 驱动、探测器、烧录工作器
+  Resources/              # 共享样式及既有翻译资源
+tests/                    # xUnit、子进程与安装测试
+docs/                     # 方案、审查和验收记录
 ```
 
-## 烧录流程
+保留原命名空间和`%APPDATA%/JLinkRTTViewer/`根目录。烧录设置仍为`user_prefs.json`，原日志位于`logs/`；打包配置为`packaging/profiles.json`，任务日志/产物在`packaging/runs/<任务ID>/`，恢复记录在`packaging/recovery/`。目录备份位于相同卷的`.dltools-backups/`，具体位置由结果和日志列出。
 
-```
-Connect（USB 双开协议 / 远程 IP）→ [整片擦除] → 每段：halt(容忍) → BeginDownload → WriteMem → EndDownload
-    → Verify（4096 块读回逐字节比对，强制执行）→ [复位] → Close
-```
+J-Link DLL可放在EXE旁，也支持SEGGER安装目录、IAR捆绑目录和PATH定位。
 
-- 后台跑在 `Task.Run` 线程池线程，经 `Dispatcher.Invoke` 封送 UI 更新；`CancellationToken` 在段/校验块边界生效
-- P/Invoke 返回值判错口径逐项对齐 `pylink-square` 参考实现（`set_tif !=0`、`connect <0`、`EraseChip <0`、`EndDownload <0`、`WriteMem` 容忍不等、`DEVICE_GetIndex <=0` 等）
-- 异常路径上 J-Link 会话经 `backend?.Close()` 兜底关闭，无句柄泄漏
+## 验证记录与开发进度
 
-## 环境要求
+改版步骤、提交与审查结果见[功能日志](DL小工具功能更新日志.md)、[方案](docs/实施步骤-DL小工具.md)及[评审记录](docs/评审记录-DL小工具.md)。构建/自动测试、真实安装、窗口检查和硬件验收分开记录，未完成的现场项不由编译替代。
 
-- Windows 10/11 **x64**、.NET 8.0 SDK
-- SEGGER J-Link 驱动（`JLink_x64.dll`）。搜索顺序：
-  1. exe 同目录（绿色部署：把 DLL 放程序旁即可）
-  2. `C:\Program Files\SEGGER\JLinkARM_DLL\`
-  3. `C:\Program Files (x86)\SEGGER\JLinkARM_DLL\`
-  4. IAR EWARM 捆绑目录、`PATH`
+历史烧录版本于2026-09-29使用J-Link + STM32H750VB、SWD4000kHz验证烧录、强制校验和复位；此前还完成HEX解析35项、配置跨进程读写及翻译资源检查，详见`烧录链修复功能更新日志.md`。历史结果不替代本次硬件回归。
 
-## 构建与运行
-
-```bash
-dotnet build 烧录上位机程序.sln
-dotnet run --project 烧录上位机程序
-```
-
-日志与用户配置位于 `%APPDATA%\JLinkRTTViewer\`（`logs/rtt_yyyyMMdd.log`、`user_prefs.json`）。
-
-## 质量记录
-
-- **真机实测**（2026-09-29）：STM32H750VB 烧录 + 强制校验 PASS + 复位运行，详见根目录 `烧录链修复功能更新日志.md`
-- **多 agent 三轮审查收敛**（2026-09-29，发现数 21 → 10 → 0）：共修复 31 项，含 3 个 P0——配置系统读写双向失效（JsonElement 装箱 + `File.Replace` 首次落盘必失败，均独立复现）、烧录中关窗杀进程；4 个 P1——HEX 缺 EOF 静默成功、bin 起始地址硬编码 0、语言切换功能空转、全局异常钩子缺失
-- **回归验证**：HEX 解析器 35 项独立测试全过（往返/跨 64K/空洞保留/缺 EOF 拒绝/BOM/CRLF）；ConfigService 两进程写→读回测试；i18n 五语 key 集合对齐校验；构建 0 警告 0 错误
-
-## 源项目参考
-
-- 源项目（Python/PySide6）：`D:\C#_text\烧录程序上位机`
-- 移植映射：`docs/PORTING_MAP.md`
-- J-Link DLL 导出表（637 项）：`docs/JLink_DLL_exports.txt`
-- pylink-square（返回值语义参考）：https://github.com/square/pylink
+源程序移植映射见`docs/PORTING_MAP.md`，DLL导出表见`docs/JLink_DLL_exports.txt`；返回值语义参考[pylink-square](https://github.com/square/pylink)。
