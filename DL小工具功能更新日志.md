@@ -21,9 +21,12 @@
 | P04 | 文件事务/模板/profiles | Services/Packaging | 已完成 |
 | P05 | 两条构建链和两种安装模式编排 | Services/Packaging/PackagingService | 已完成 |
 | P06 | 打包页完整交互 | Pages、ViewModels | 已完成 |
+| R1 | 修正安装名称引号保真并验证安装生命周期 | InstallerTemplateBuilder、InstallerLifecycleTests | 已完成 |
 | P07 | 回归/文档/三路最终审查 | tests、docs、README、AGENTS | 未开始 |
 
 ## 已知风险
+
+- P07安装发现的Setup引号显示问题已由R1修复并审查通过；跨进程/管道测试草稿继续留待P07提交。
 
 1. 真机烧录、干净目标机安装和缩放验收尚未执行，开发期间逐项记录。
 2. Framework入口输出和已有脚本Source输入非空时，需要产品界面明确确认及备份；恢复失败必须可定位。
@@ -33,6 +36,19 @@
 - .zcodeignore、打包教程.md保留未跟踪；AGENTS按计划最终更新。
 
 ## 更新记录
+
+### 2026年10月15日（更新8）
+
+**更新内容**：真实安装发现[Setup]单值误用参数段双引号转义，已拆出SetupValue保留内部引号，参数段继续正确双引号编码。新增双开关真实安装生命周期测试，使用新GUID/独占临时根，验证中文、引号、花括号及ISPP字面值；安装/两次真实启动/同ID改包名升级/注册版本更新/卸载保留用户数据全部通过，并检查清理无残留。
+
+**涉及位置**：InstallerTemplateBuilder、InstallerLifecycleTests、验收与评审记录。
+
+**对应待办**：R1（P07验证中新发现的必要修复）。
+
+**审查结果**：通过（第1轮），无阻塞；生命周期+模板7/7零跳过，独立真实模板6/6零跳过，构建零警告。跨进程/管道草稿未纳入本提交。
+
+**Git Commit**：feat(R1): preserve literal setup metadata and verify installer lifecycle
+
 
 ### 2026年10月15日（更新7）
 
@@ -44,7 +60,7 @@
 
 **审查结果**：通过（第1轮），无阻塞；独立门闩/宿主6/6通过、零跳过，Release零警告错误。建议后续增加VM状态自动测试；实际窗口记录已保留。
 
-**Git Commit**：feat(P06): deliver packaging workflow UI and coordinated shutdown prompts
+**Git Commit**：feat(P06): deliver packaging workflow UI and coordinated shutdown prompts（a153e61）
 
 
 ### 2026年10月15日（更新6）
@@ -126,10 +142,3 @@
 **审查结果**：通过（第1轮）；采纳Framework支持范围澄清。
 
 **Git Commit**：feat(P00): document approved DL tools implementation plan（8a66dda）
-
-
-
-
-
-
-
