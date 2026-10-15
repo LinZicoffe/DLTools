@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.14.37012.4 d17.14
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "烧录上位机程序", "烧录上位机程序\烧录上位机程序.csproj", "{CA082014-A714-4ED5-896A-CEF726503478}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DL小工具", "烧录上位机程序\DL小工具.csproj", "{CA082014-A714-4ED5-896A-CEF726503478}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

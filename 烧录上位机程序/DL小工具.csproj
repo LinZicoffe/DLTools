@@ -2,6 +2,10 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <RootNamespace>烧录上位机程序</RootNamespace>
+    <AssemblyName>DL小工具</AssemblyName>
+    <Product>DL小工具</Product>
+    <Title>DL小工具</Title>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

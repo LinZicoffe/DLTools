@@ -8,9 +8,9 @@
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:material="clr-namespace:Material.Icons.WPF;assembly=Material.Icons.WPF"
         mc:Ignorable="d"
-        Title="{i18n:Loc 'J-Link 烧录上位机'}"
+        Title="DL小工具"
         Width="1280" Height="800"
-        MinWidth="520" MinHeight="560"
+        MinWidth="1000" MinHeight="700"
         WindowStartupLocation="CenterScreen">
     <!-- FluentWindow 的模板不含系统标题按钮且会剥离 WS_SYSMENU，窗口三键由
          标题栏右侧的自绘按钮提供（ui:TitleBar 在 Win11 26200 上点击无响应，
@@ -22,8 +22,7 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- 顶部标题栏：左侧品牌区，右侧最小化/最大化/关闭；
-             应用只保留固件烧录一个功能页，无页面导航 -->
+        <!-- 顶部品牌和自绘窗口按钮。 -->
         <Grid Grid.Row="0" Background="Transparent" MouseLeftButtonDown="HeaderRoot_MouseLeftButtonDown">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="20,11,0,11">
                 <Border Width="36" Height="36" CornerRadius="8" Background="{StaticResource AccentBrush}">
@@ -31,9 +30,9 @@
                                            Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Border>
                 <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                    <TextBlock Text="{i18n:Loc 'J-Link 烧录上位机'}" FontSize="16" FontWeight="Bold"
+                    <TextBlock Text="DL小工具" FontSize="16" FontWeight="Bold"
                                Foreground="{StaticResource TextPrimaryBrush}"/>
-                    <TextBlock Text="{i18n:Loc '固件烧录工具 · 基于 SEGGER J-Link DLL'}" FontSize="11"
+                    <TextBlock Text="常用工具集合" FontSize="11"
                                Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2,0,0"/>
                 </StackPanel>
             </StackPanel>
@@ -56,9 +55,22 @@
         <Border Grid.Row="0" VerticalAlignment="Bottom" Height="1"
                 Background="{StaticResource CardBorderBrush}" Margin="20,0"/>
 
-        <!-- 内容区：Page 的可视父级只能是 Window/Frame，必须用 Frame 承载；
-             显式 Stretch 防止页面按内容高度排版（否则日志区 * 行塌陷） -->
-        <Frame Grid.Row="1" Content="{Binding CurrentPage}" NavigationUIVisibility="Hidden"
-               HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="180"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="0,0,1,0">
+                <StackPanel Margin="12,16">
+                    <Button Content="固件烧录" Command="{Binding ShowFlashCommand}"
+                            Style="{StaticResource SecondaryButtonStyle}" Height="44" Margin="0,0,0,10"/>
+                    <Button Content="项目打包" Command="{Binding ShowPackagingCommand}"
+                            Style="{StaticResource SecondaryButtonStyle}" Height="44"/>
+                </StackPanel>
+            </Border>
+            <!-- 保持有界测量，让页面日志区的 * 行可用。页面实例由 ViewModel 缓存。 -->
+            <Frame Grid.Column="1" Content="{Binding CurrentPage}" NavigationUIVisibility="Hidden"
+                   HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
+        </Grid>
     </Grid>
 </ui:FluentWindow>

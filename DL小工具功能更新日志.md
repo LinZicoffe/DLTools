@@ -15,7 +15,7 @@
 | ID | 待办描述 | 预计代码位置 | 状态 |
 |---|---|---|---|
 | P00 | 方案与记录/分支 | docs、当前日志 | 已完成 |
-| P01 | 外壳/缓存导航/延迟JLink/任务宿主 | 主窗口、App、FlashWorker、Services | 未开始 |
+| P01 | 外壳/缓存导航/延迟JLink/任务宿主 | 主窗口、App、FlashWorker、Services | 已完成 |
 | P02 | 模型/Job进程执行/工具定位/测试基础 | Models/Packaging、Services/Packaging、tests | 未开始 |
 | P03 | 项目识别和配置映射 | Services/Packaging/ProjectInspectionService | 未开始 |
 | P04 | 文件事务/模板/profiles | Services/Packaging | 未开始 |
@@ -33,6 +33,20 @@
 - .zcodeignore、打包教程.md保留未跟踪；AGENTS按计划最终更新。
 
 ## 更新记录
+
+### 2026年10月15日（更新2）
+
+**更新内容**：统一产品/工程名，缓存两页导航；J-Link延迟至烧录并释放；真实Task终态全局互斥与跨页关窗；表单有界滚动。修正确认框期间Task完成导致的重入Close，最终关闭排入Dispatcher。Release 0警告0错误，宿主并发取消100×5及终态检查通过，启动标题正确/JLink模块0/正常关闭。
+
+**涉及位置**：DL小工具.sln、主工程、MainWindow、App、FlashWorker、BackgroundTaskHost、FlashPage与PackagingPage。
+
+**对应待办**：P01。
+
+**审查结果**：通过（第2轮）；第1轮关窗重入阻塞已修。硬件/150%缩放待最终现场验收。
+
+**Git Commit**：feat(P01): add DL tools shell and safe background task ownership
+
+
 
 ### 2026年10月15日（更新1）
 

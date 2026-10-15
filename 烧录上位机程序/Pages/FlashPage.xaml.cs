@@ -91,7 +91,13 @@ public partial class FlashPage : BasePage
 
         // 仅在任务真正启动时翻转按钮；竞态下 StartFlash 拒绝重复启动时
         // 不动按钮（否则再无事件恢复，按钮会永久卡死）
-        if (!_worker!.StartFlash(p)) return;
+        if (!_worker!.StartFlash(p))
+        {
+            if (!_worker.IsBusy)
+                MessageBox.Show("另一个后台任务正在运行，请等待完成后再开始烧录。", "任务进行中",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
         StartBtn.IsEnabled = false;
         StopBtn.IsEnabled = true;
     }

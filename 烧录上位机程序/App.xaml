@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:烧录上位机程序"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
-    <!-- 主窗口由 App.OnStartup 手动创建（加载 DLL 失败时先弹错误并退出，不显示窗口），
+    <!-- 主窗口由 App.OnStartup 手动创建，J-Link DLL 在启动烧录时才加载；
          此处不再设 StartupUri，否则会创建第二个主窗口 -->
     <Application.Resources>
         <ResourceDictionary>

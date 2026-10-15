@@ -7,13 +7,13 @@
                 xmlns:material="clr-namespace:Material.Icons.WPF;assembly=Material.Icons.WPF">
     <Grid Background="{StaticResource PageBgBrush}" TextElement.FontSize="13" TextElement.Foreground="{StaticResource TextPrimaryBrush}">
         <Grid.RowDefinitions>
+            <RowDefinition Height="3*" MinHeight="120"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
+            <RowDefinition Height="2*" MinHeight="160"/>
         </Grid.RowDefinitions>
 
+        <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel>
         <!-- ============ 连接参数 ============ -->
         <GroupBox Grid.Row="0" Margin="16,12,16,0">
             <GroupBox.Header>
@@ -121,6 +121,7 @@
                     <TextBlock Text="{i18n:Loc '烧录选项'}" FontWeight="SemiBold" FontSize="14" Margin="8,0,0,0"/>
                 </StackPanel>
             </GroupBox.Header>
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
             <StackPanel Orientation="Horizontal">
                 <StackPanel>
                     <TextBlock Text="{i18n:Loc '擦除模式'}" FontSize="11" Margin="0,0,0,6"
@@ -162,10 +163,13 @@
                     </StackPanel>
                 </StackPanel>
             </StackPanel>
+            </ScrollViewer>
         </GroupBox>
+        </StackPanel>
+        </ScrollViewer>
 
         <!-- ============ 操作与进度 ============ -->
-        <StackPanel Grid.Row="3" Margin="0,14,0,12">
+        <StackPanel Grid.Row="1" Margin="0,14,0,12">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                 <Button x:Name="StartBtn" Click="StartFlash_Click" Style="{StaticResource PrimaryButtonStyle}"
                         MinWidth="150" Height="38" Margin="4">
@@ -198,14 +202,14 @@
         </StackPanel>
 
         <!-- ============ 日志 ============ -->
-        <GroupBox Grid.Row="4" Margin="16,0,16,14">
+        <GroupBox Grid.Row="2" Margin="16,0,16,14">
             <GroupBox.Header>
                 <StackPanel Orientation="Horizontal">
                     <material:MaterialIcon Kind="Console" Width="17" Height="17" Foreground="{StaticResource AccentBrush}"/>
                     <TextBlock Text="{i18n:Loc '日志'}" FontWeight="SemiBold" FontSize="14" Margin="8,0,0,0"/>
                 </StackPanel>
             </GroupBox.Header>
-            <TextBox x:Name="LogBox" Style="{StaticResource LogConsoleStyle}" MinHeight="220"/>
+            <TextBox x:Name="LogBox" Style="{StaticResource LogConsoleStyle}" MinHeight="100"/>
         </GroupBox>
     </Grid>
 </local:BasePage>
