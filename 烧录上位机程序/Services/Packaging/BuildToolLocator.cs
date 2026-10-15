@@ -53,21 +53,22 @@ public sealed class BuildToolLocator(IExternalProcessRunner? runner = null)
                 "需要 Visual Studio MSBuild 17.8 或更新版本。", cancellationToken),
             ProbeAsync("Inno Setup", tools.InnoCompilerPath, ["/?"], s =>
                 Regex.IsMatch(s, @"Inno Setup\s+(?:[6-9]|[1-9]\d+)\b", RegexOptions.IgnoreCase),
-                "需要 Inno Setup 6 或更新版本。", cancellationToken));
+                "需要 Inno Setup 6 或更新版本。", cancellationToken, helpExitCodeOne: true));
         return [.. diagnostics, new ToolDiagnostic("Inno 简体中文语言文件", tools.ChineseLanguagePath,
             File.Exists(tools.ChineseLanguagePath), File.Exists(tools.ChineseLanguagePath)
                 ? "已找到 ChineseSimplified.isl" : "请将 ChineseSimplified.isl 放到 Inno Setup 的 Languages 目录。")];
     }
 
     private async Task<ToolDiagnostic> ProbeAsync(string name, string path, IReadOnlyList<string> args,
-        Func<string, bool> accepts, string requirement, CancellationToken cancellationToken)
+        Func<string, bool> accepts, string requirement, CancellationToken cancellationToken, bool helpExitCodeOne = false)
     {
         if (!File.Exists(path)) return new(name, path, false, $"未找到工具。{requirement}");
         try
         {
             var result = await _runner.RunAsync(path, args, Path.GetDirectoryName(path)!, cancellationToken: cancellationToken);
             var output = result.StandardOutput + "\n" + result.StandardError;
-            bool available = result.ExitCode == 0 && accepts(output);
+            // ISCC /? uses exit code 1 for a successful help request (there is no script to compile).
+            bool available = (result.ExitCode == 0 || (helpExitCodeOne && result.ExitCode == 1)) && accepts(output);
             return new(name, path, available, available ? output.Trim() : requirement + "\n" + output.Trim());
         }
         catch (OperationCanceledException) { throw; }

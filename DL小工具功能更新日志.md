@@ -19,7 +19,7 @@
 | P02 | 模型/Job进程执行/工具定位/测试基础 | Models/Packaging、Services/Packaging、tests | 已完成 |
 | P03 | 项目识别和配置映射 | Services/Packaging/ProjectInspectionService | 已完成 |
 | P04 | 文件事务/模板/profiles | Services/Packaging | 已完成 |
-| P05 | 两条构建链和两种安装模式编排 | Services/Packaging/PackagingService | 未开始 |
+| P05 | 两条构建链和两种安装模式编排 | Services/Packaging/PackagingService | 已完成 |
 | P06 | 打包页完整交互 | Pages、ViewModels | 未开始 |
 | P07 | 回归/文档/三路最终审查 | tests、docs、README、AGENTS | 未开始 |
 
@@ -34,6 +34,19 @@
 
 ## 更新记录
 
+### 2026年10月15日（更新6）
+
+**更新内容**：现代dotnet restore/publish、Framework VS MSBuild Restore/Rebuild、完整收集及两种Inno模式串联；全组目录预检、实时阶段、取消整组退出后逆序恢复，最终包提交才提交目录。修正真实ISCC帮助退出码1，新增有效ISPP规则检查以拒绝外部附属内容，并统一识别/构建解决方案属性，保护条件TargetDir及外部引用平台映射。5类真实项目构建/ISCC矩阵通过；最新回归109/109（长矩阵此前通过）零跳过。独立最终针对检查14/14通过。
+
+**涉及位置**：PackagingService、SolutionBuildContext、ExistingScriptValidator、ProjectInspectionService、BuildToolLocator与对应测试。
+
+**对应待办**：P05。
+
+**审查结果**：通过（第3轮）；第1轮external侧载漏检、第2轮评估/构建上下文不一致均已修。已有脚本须支持ISPP有效规则导出，无法验证时明确拒绝；展开内容不记录日志。
+
+**Git Commit**：feat(P05): orchestrate desktop builds and safe installer compilation
+
+
 ### 2026年10月15日（更新5）
 
 **更新内容**：实现安全路径和资源映射、可恢复目录事务、跨卷暂存校验与同卷原子提交、Inno模板与稳定AppId配置。修复恢复记录只保护完全相同目录的漏洞：命名mutex原子扫描/注册，保护目标、备份及失败输出的父子路径，损坏记录保守阻止。全量81/81及新增6/6通过；独立P04复跑55/55和新增6/6，真实Inno启用，零跳过、零警告。
@@ -44,7 +57,7 @@
 
 **审查结果**：通过（第2轮）；第1轮目录重叠阻塞已修。真实跨进程并发回归列P07。
 
-**Git Commit**：feat(P04): protect packaging files and persist installer identity
+**Git Commit**：feat(P04): protect packaging files and persist installer identity（c4e9293）
 
 
 ### 2026年10月15日（更新4）
@@ -100,4 +113,7 @@
 **审查结果**：通过（第1轮）；采纳Framework支持范围澄清。
 
 **Git Commit**：feat(P00): document approved DL tools implementation plan（8a66dda）
+
+
+
 

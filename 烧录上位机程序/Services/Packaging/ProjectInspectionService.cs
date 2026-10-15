@@ -114,16 +114,9 @@ public sealed class ProjectInspectionService(IExternalProcessRunner? runner = nu
         var args = new List<string>();
         if (!framework) args.Add("msbuild");
         args.AddRange([project.ProjectPath, "-nologo", "-nr:false", "-p:UseSharedCompilation=false",
-            "-p:Configuration=" + project.Configuration, "-p:Platform=" + project.Platform,
             "-getProperty:" + Properties, "-getItem:Reference"]);
+        args.AddRange(SolutionBuildContext.Arguments(project));
         if (!string.IsNullOrEmpty(project.TargetFramework)) args.Add("-p:TargetFramework=" + project.TargetFramework);
-        if (project.SolutionPath is { } solution)
-        {
-            args.Add("-p:SolutionDir=" + Path.GetDirectoryName(solution) + Path.DirectorySeparatorChar);
-            args.Add("-p:SolutionPath=" + solution);
-            args.Add("-p:SolutionFileName=" + Path.GetFileName(solution));
-            args.Add("-p:SolutionName=" + Path.GetFileNameWithoutExtension(solution));
-        }
         var result = await _runner.RunAsync(tool, args, Path.GetDirectoryName(project.ProjectPath)!,
             cancellationToken: cancellationToken).ConfigureAwait(false);
         if (result.ExitCode != 0)

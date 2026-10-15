@@ -7,6 +7,22 @@ namespace DLTools.Tests;
 public class BuildToolLocatorTests
 {
     [Fact]
+    public async Task InnoHelpExitOne_WithValidVersion_IsAvailable()
+    {
+        using var workspace = new TestWorkspace();
+        var path = workspace.Write("ISCC.exe", "fixture");
+        var result = await new BuildToolLocator(new InnoHelpRunner()).DiagnoseAsync(new BuildTools { InnoCompilerPath = path });
+        Assert.True(result.Single(d => d.Name == "Inno Setup").Available);
+    }
+
+    private sealed class InnoHelpRunner : IExternalProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
+            Action<string>? log = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ProcessResult(1, "Inno Setup 6 Command-Line Compiler", "Usage: iscc [options] scriptfile.iss"));
+    }
+
+    [Fact]
     public async Task ExplicitMissingTool_IsPreservedAndDiagnosedRatherThanSilentlyReplaced()
     {
         using var workspace = new TestWorkspace();
