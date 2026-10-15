@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Windows;
 using System.Windows.Input;
 using Material.Icons;
@@ -9,6 +9,7 @@ namespace 烧录上位机程序;
 public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 {
     private bool _forceClose;
+    private readonly CloseConfirmationGate _closeConfirmation = new();
     // 已确认退出、正在等待后台任务结束期间为 true：
     // 此时再点 X 直接忽略，避免弹第二个确认框与产生分歧的关闭链
     private bool _closingInProgress;
@@ -23,9 +24,22 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         I18nService.LoadLanguage("zh_CN");
     }
 
+    public async Task<bool> WaitForCloseDecisionAsync(CancellationToken cancellationToken = default)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var allowed = await _closeConfirmation.WaitAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!allowed || _closingInProgress) return false;
+            // A second close attempt can enter another native message loop before our continuation runs.
+            if (!_closeConfirmation.IsPending) return true;
+        }
+    }
+
     protected override async void OnClosing(CancelEventArgs e)
     {
-        if (_closingInProgress)
+        if (_closingInProgress || _closeConfirmation.IsPending)
         {
             // 等待后台任务退出期间的重复关窗请求：吞掉（首轮流程会完成关闭）
             e.Cancel = true;
@@ -39,28 +53,51 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             // 芯片可能停在半擦除/半写入状态且 J-Link 会话不会被正常关闭
             e.Cancel = true;
             bool flashing = host.CurrentKind == BackgroundOperationKind.Flashing;
-            var answer = MessageBox.Show(this,
-                flashing
-                    ? I18nService.GetString("烧录进行中，强制退出可能使芯片停留在半擦除/半写入状态") + "\n" +
-                      I18nService.GetString("确定要停止烧录并退出吗？")
-                    : "项目打包正在进行。确定取消任务，等待进程结束及文件恢复后退出吗？",
-                I18nService.GetString("确认退出"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (answer != MessageBoxResult.Yes) return;
+            // A native MessageBox pumps the dispatcher without changing WPF IsEnabled.
+            // Publish this gate before showing it so packaging cannot nest another question on top.
+            if (!_closeConfirmation.TryBegin()) return;
+            MessageBoxResult answer;
+            try
+            {
+                answer = MessageBox.Show(this,
+                    flashing
+                        ? I18nService.GetString("烧录进行中，强制退出可能使芯片停留在半擦除/半写入状态") + "\n" +
+                          I18nService.GetString("确定要停止烧录并退出吗？")
+                        : "项目检查或打包任务正在进行。确定取消任务，等待进程结束及文件恢复后退出吗？",
+                    I18nService.GetString("确认退出"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            }
+            catch (Exception error)
+            {
+                _closeConfirmation.Complete(allowFurtherPrompts: true);
+                try { LoggerService.Error($"显示退出确认失败: {error.Message}"); } catch { }
+                return;
+            }
+            if (answer != MessageBoxResult.Yes)
+            {
+                _closeConfirmation.Complete(allowFurtherPrompts: true);
+                return;
+            }
 
             _closingInProgress = true;
             IsEnabled = false; // 等待期间禁止从其他页面启动新任务。
             try
             {
                 var task = host.CurrentTask;
+                var waitingForFlashing = host.CurrentKind == BackgroundOperationKind.Flashing;
                 try { host.RequestCancellation(); }
                 catch (Exception ex)
                 {
                     // A failing cancellation callback must never skip waiting for packaging rollback.
                     try { LoggerService.Error($"请求后台任务取消失败: {ex.Message}"); } catch { }
                 }
+                finally
+                {
+                    // Release before awaiting the task: a packaging prompt may itself be waiting on this gate.
+                    _closeConfirmation.Complete(allowFurtherPrompts: false);
+                }
                 if (task is not null)
                 {
-                    if (flashing)
+                    if (waitingForFlashing)
                         await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(15)));
                     else
                         await task; // 打包必须等进程退出、恢复目录完成，不得超时杀进程。

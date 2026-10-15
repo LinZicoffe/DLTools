@@ -20,7 +20,7 @@
 | P03 | 项目识别和配置映射 | Services/Packaging/ProjectInspectionService | 已完成 |
 | P04 | 文件事务/模板/profiles | Services/Packaging | 已完成 |
 | P05 | 两条构建链和两种安装模式编排 | Services/Packaging/PackagingService | 已完成 |
-| P06 | 打包页完整交互 | Pages、ViewModels | 未开始 |
+| P06 | 打包页完整交互 | Pages、ViewModels | 已完成 |
 | P07 | 回归/文档/三路最终审查 | tests、docs、README、AGENTS | 未开始 |
 
 ## 已知风险
@@ -34,6 +34,19 @@
 
 ## 更新记录
 
+### 2026年10月15日（更新7）
+
+**更新内容**：完成四步打包页、候选与配置选择、识别说明、工具路径、两种模式、额外资源、配置记忆和实时结果/日志。保护候选对应的配置加载与稳定AppId，源/配置变化禁止旧描述符打包。实测修正只读TextBox双向绑定启动异常、原生关窗确认期间叠加覆盖确认的竞态；新增可取消关窗门闩。中文空格项目从UI真实打包成功、导航缓存、重启配置、1000×700滚动及跨页关窗取消验证通过，旧包SHA不变。
+
+**涉及位置**：PackagingPage、PackagingViewModel、主窗导航/关闭、CloseConfirmationGate及测试、验收记录。
+
+**对应待办**：P06。
+
+**审查结果**：通过（第1轮），无阻塞；独立门闩/宿主6/6通过、零跳过，Release零警告错误。建议后续增加VM状态自动测试；实际窗口记录已保留。
+
+**Git Commit**：feat(P06): deliver packaging workflow UI and coordinated shutdown prompts
+
+
 ### 2026年10月15日（更新6）
 
 **更新内容**：现代dotnet restore/publish、Framework VS MSBuild Restore/Rebuild、完整收集及两种Inno模式串联；全组目录预检、实时阶段、取消整组退出后逆序恢复，最终包提交才提交目录。修正真实ISCC帮助退出码1，新增有效ISPP规则检查以拒绝外部附属内容，并统一识别/构建解决方案属性，保护条件TargetDir及外部引用平台映射。5类真实项目构建/ISCC矩阵通过；最新回归109/109（长矩阵此前通过）零跳过。独立最终针对检查14/14通过。
@@ -44,7 +57,7 @@
 
 **审查结果**：通过（第3轮）；第1轮external侧载漏检、第2轮评估/构建上下文不一致均已修。已有脚本须支持ISPP有效规则导出，无法验证时明确拒绝；展开内容不记录日志。
 
-**Git Commit**：feat(P05): orchestrate desktop builds and safe installer compilation
+**Git Commit**：feat(P05): orchestrate desktop builds and safe installer compilation（a1f6630）
 
 
 ### 2026年10月15日（更新5）
@@ -113,6 +126,9 @@
 **审查结果**：通过（第1轮）；采纳Framework支持范围澄清。
 
 **Git Commit**：feat(P00): document approved DL tools implementation plan（8a66dda）
+
+
+
 
 
 

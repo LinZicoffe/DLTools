@@ -9,17 +9,18 @@ public partial class MainWindowViewModel : ObservableObject
     private readonly FlashPage _flashPage = new();
     private readonly PackagingPage _packagingPage = new();
 
-    public MainWindowViewModel()
+    public MainWindowViewModel() => CurrentPage = _flashPage;
+
+    [ObservableProperty] private BasePage? _currentPage;
+    public bool IsFlashSelected => ReferenceEquals(CurrentPage, _flashPage);
+    public bool IsPackagingSelected => ReferenceEquals(CurrentPage, _packagingPage);
+
+    partial void OnCurrentPageChanged(BasePage? value)
     {
-        CurrentPage = _flashPage;
+        OnPropertyChanged(nameof(IsFlashSelected));
+        OnPropertyChanged(nameof(IsPackagingSelected));
     }
 
-    [ObservableProperty]
-    private BasePage? _currentPage;
-
-    [RelayCommand]
-    private void ShowFlash() => CurrentPage = _flashPage;
-
-    [RelayCommand]
-    private void ShowPackaging() => CurrentPage = _packagingPage;
+    [RelayCommand] private void ShowFlash() => CurrentPage = _flashPage;
+    [RelayCommand] private void ShowPackaging() => CurrentPage = _packagingPage;
 }
