@@ -18,7 +18,7 @@
 | P01 | 外壳/缓存导航/延迟JLink/任务宿主 | 主窗口、App、FlashWorker、Services | 已完成 |
 | P02 | 模型/Job进程执行/工具定位/测试基础 | Models/Packaging、Services/Packaging、tests | 已完成 |
 | P03 | 项目识别和配置映射 | Services/Packaging/ProjectInspectionService | 已完成 |
-| P04 | 文件事务/模板/profiles | Services/Packaging | 未开始 |
+| P04 | 文件事务/模板/profiles | Services/Packaging | 已完成 |
 | P05 | 两条构建链和两种安装模式编排 | Services/Packaging/PackagingService | 未开始 |
 | P06 | 打包页完整交互 | Pages、ViewModels | 未开始 |
 | P07 | 回归/文档/三路最终审查 | tests、docs、README、AGENTS | 未开始 |
@@ -34,6 +34,19 @@
 
 ## 更新记录
 
+### 2026年10月15日（更新5）
+
+**更新内容**：实现安全路径和资源映射、可恢复目录事务、跨卷暂存校验与同卷原子提交、Inno模板与稳定AppId配置。修复恢复记录只保护完全相同目录的漏洞：命名mutex原子扫描/注册，保护目标、备份及失败输出的父子路径，损坏记录保守阻止。全量81/81及新增6/6通过；独立P04复跑55/55和新增6/6，真实Inno启用，零跳过、零警告。
+
+**涉及位置**：Services/Packaging文件保护、模板、profile服务及对应测试。
+
+**对应待办**：P04。
+
+**审查结果**：通过（第2轮）；第1轮目录重叠阻塞已修。真实跨进程并发回归列P07。
+
+**Git Commit**：feat(P04): protect packaging files and persist installer identity
+
+
 ### 2026年10月15日（更新4）
 
 **更新内容**：真实MSBuild评估SDK/legacy Framework WPF/Forms；安全发现目录/sln/csproj、Release映射、多TFM独立候选、CPU/RID、开发包诊断。修正Framework有效EXE名称、单TFM失败丢失其他目标、CLR实现目录误作DeveloperPack。vswhere UTF8与损坏发现工具降级。独立复审Release识别14/14、完整26/26通过零跳过。
@@ -44,7 +57,7 @@
 
 **审查结果**：通过（第2轮），2个审查阻塞和1个父验证边界已修；实际restore/build依赖仍由P05验证。
 
-**Git Commit**：feat(P03): inspect effective desktop project metadata and solution mappings
+**Git Commit**：feat(P03): inspect effective desktop project metadata and solution mappings（d37736d）
 
 
 
@@ -87,3 +100,4 @@
 **审查结果**：通过（第1轮）；采纳Framework支持范围澄清。
 
 **Git Commit**：feat(P00): document approved DL tools implementation plan（8a66dda）
+

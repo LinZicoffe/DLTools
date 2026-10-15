@@ -33,3 +33,7 @@
 ### P03 第1～2轮
 
 第1轮不通过：Framework有效TargetName/TargetFileName不同于AssemblyName时入口错；一个TFM失败会丢其他TFM。已修并加真实反例。父验证发现MSBuild FrameworkPathOverride自动回退CLR实现目录，已排除以避免误报DeveloperPack。第2轮全新Reviewer通过，无阻塞；独立识别14/14、完整26/26通过0跳过。后续实际构建验证依赖、外部项目和多平台。
+
+### P04 第1～2轮
+
+第1轮不通过：精确目标hash未保护恢复事务的父子目录和原始备份。已用命名mutex串行扫描/注册/清除，保护所有Target/Backup/Failed路径双向重叠；损坏记录保守阻止。第2轮全新Reviewer通过，独立文件保护/模板/profile/跨卷测试55/55及新增重叠并发6/6通过，真实Inno启用、零跳过、构建无警告。跨进程并发补充列入P07。

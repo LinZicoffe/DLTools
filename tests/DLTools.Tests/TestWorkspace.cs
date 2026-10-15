@@ -2,8 +2,12 @@ namespace DLTools.Tests;
 
 public sealed class TestWorkspace : IDisposable
 {
-    public string Root { get; } = Path.Combine(Path.GetTempPath(), "DLTools.Tests", Guid.NewGuid().ToString("N"));
-    public TestWorkspace() => Directory.CreateDirectory(Root);
+    public string Root { get; }
+    public TestWorkspace(string? baseDirectory = null)
+    {
+        Root = Path.Combine(baseDirectory ?? Path.GetTempPath(), "DLTools.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Root);
+    }
     public string Write(string relative, string contents)
     {
         var path = Path.Combine(Root, relative);
