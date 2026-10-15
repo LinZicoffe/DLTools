@@ -16,7 +16,7 @@
 |---|---|---|---|
 | P00 | 方案与记录/分支 | docs、当前日志 | 已完成 |
 | P01 | 外壳/缓存导航/延迟JLink/任务宿主 | 主窗口、App、FlashWorker、Services | 已完成 |
-| P02 | 模型/Job进程执行/工具定位/测试基础 | Models/Packaging、Services/Packaging、tests | 未开始 |
+| P02 | 模型/Job进程执行/工具定位/测试基础 | Models/Packaging、Services/Packaging、tests | 已完成 |
 | P03 | 项目识别和配置映射 | Services/Packaging/ProjectInspectionService | 未开始 |
 | P04 | 文件事务/模板/profiles | Services/Packaging | 未开始 |
 | P05 | 两条构建链和两种安装模式编排 | Services/Packaging/PackagingService | 未开始 |
@@ -34,6 +34,20 @@
 
 ## 更新记录
 
+### 2026年10月15日（更新3）
+
+**更新内容**：新增打包模型、工具定位/版本诊断、原子Job归组无窗口执行器、双流日志、取消整树等待和xUnit基础。Release全量12/12通过、0跳过；父先退出后子持锁取消加强用例另通过1/1；独立审查复跑全量12/12通过。
+
+**涉及位置**：Models/Packaging、Services/Packaging/BuildToolLocator、ExternalProcessRunner、WindowsJobNative、tests。
+
+**对应待办**：P02。
+
+**审查结果**：通过（第1轮），无阻塞。
+
+**Git Commit**：feat(P02): add job-contained process runner and packaging tool diagnostics
+
+
+
 ### 2026年10月15日（更新2）
 
 **更新内容**：统一产品/工程名，缓存两页导航；J-Link延迟至烧录并释放；真实Task终态全局互斥与跨页关窗；表单有界滚动。修正确认框期间Task完成导致的重入Close，最终关闭排入Dispatcher。Release 0警告0错误，宿主并发取消100×5及终态检查通过，启动标题正确/JLink模块0/正常关闭。
@@ -44,7 +58,7 @@
 
 **审查结果**：通过（第2轮）；第1轮关窗重入阻塞已修。硬件/150%缩放待最终现场验收。
 
-**Git Commit**：feat(P01): add DL tools shell and safe background task ownership
+**Git Commit**：feat(P01): add DL tools shell and safe background task ownership（74459db）
 
 
 
@@ -58,4 +72,4 @@
 
 **审查结果**：通过（第1轮）；采纳Framework支持范围澄清。
 
-**Git Commit**：feat(P00): document approved DL tools implementation plan
+**Git Commit**：feat(P00): document approved DL tools implementation plan（8a66dda）
