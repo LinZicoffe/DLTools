@@ -29,3 +29,7 @@
 ### P02 第1轮
 
 通过，无阻塞。Reviewer实际核对全部新增服务与测试，独立Release --no-build全量12/12通过；父进程退出后子持锁场景已显式等待父进程退出再取消。
+
+### P03 第1～2轮
+
+第1轮不通过：Framework有效TargetName/TargetFileName不同于AssemblyName时入口错；一个TFM失败会丢其他TFM。已修并加真实反例。父验证发现MSBuild FrameworkPathOverride自动回退CLR实现目录，已排除以避免误报DeveloperPack。第2轮全新Reviewer通过，无阻塞；独立识别14/14、完整26/26通过0跳过。后续实际构建验证依赖、外部项目和多平台。

@@ -19,6 +19,10 @@ public sealed record ProjectDescriptor
     public string ProjectPath { get; init; } = "";
     public string SourceRoot { get; init; } = "";
     public string? SolutionPath { get; init; }
+    public string SolutionConfiguration { get; init; } = "";
+    public IReadOnlyList<string> AvailableConfigurations { get; init; } = [];
+    public IReadOnlyList<string> AvailablePlatforms { get; init; } = [];
+    public string TargetingPackDirectory { get; init; } = "";
     public string ProjectName { get; init; } = "";
     public string Configuration { get; init; } = "Release";
     public string Platform { get; init; } = "AnyCPU";
@@ -28,8 +32,11 @@ public sealed record ProjectDescriptor
     public bool IsSdkStyle { get; init; }
     public string UiFramework { get; init; } = "";
     public string PlatformTarget { get; init; } = "AnyCPU";
+    public string DeclaredRuntimeIdentifier { get; init; } = "";
+    public IReadOnlyList<string> DeclaredRuntimeIdentifiers { get; init; } = [];
     public bool Prefer32Bit { get; init; }
     public string AssemblyName { get; init; } = "";
+    public string ResolvedExecutableName { get; init; } = "";
     public string ProductName { get; init; } = "";
     public string Version { get; init; } = "1.0.0";
     public string ApplicationIcon { get; init; } = "";
@@ -37,8 +44,9 @@ public sealed record ProjectDescriptor
     public string Evidence { get; init; } = "";
     public string UnsupportedReason { get; init; } = "";
     public bool IsSupported => string.IsNullOrEmpty(UnsupportedReason);
-    public string MainExecutable => AssemblyName + ".exe";
-    public string DisplayName => $"{ProjectName} — {UiFramework} / {TargetFramework} / {Configuration}|{Platform}";
+    public string MainExecutable => string.IsNullOrWhiteSpace(ResolvedExecutableName) ? AssemblyName + ".exe" : ResolvedExecutableName;
+    public string DisplayName => $"{ProjectName} — {UiFramework} / {TargetFramework} / {Configuration}|{Platform}"
+        + (string.IsNullOrEmpty(SolutionConfiguration) ? "" : $" [解决方案 {SolutionConfiguration}]");
     public override string ToString() => DisplayName;
 }
 

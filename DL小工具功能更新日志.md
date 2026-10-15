@@ -17,7 +17,7 @@
 | P00 | 方案与记录/分支 | docs、当前日志 | 已完成 |
 | P01 | 外壳/缓存导航/延迟JLink/任务宿主 | 主窗口、App、FlashWorker、Services | 已完成 |
 | P02 | 模型/Job进程执行/工具定位/测试基础 | Models/Packaging、Services/Packaging、tests | 已完成 |
-| P03 | 项目识别和配置映射 | Services/Packaging/ProjectInspectionService | 未开始 |
+| P03 | 项目识别和配置映射 | Services/Packaging/ProjectInspectionService | 已完成 |
 | P04 | 文件事务/模板/profiles | Services/Packaging | 未开始 |
 | P05 | 两条构建链和两种安装模式编排 | Services/Packaging/PackagingService | 未开始 |
 | P06 | 打包页完整交互 | Pages、ViewModels | 未开始 |
@@ -34,6 +34,20 @@
 
 ## 更新记录
 
+### 2026年10月15日（更新4）
+
+**更新内容**：真实MSBuild评估SDK/legacy Framework WPF/Forms；安全发现目录/sln/csproj、Release映射、多TFM独立候选、CPU/RID、开发包诊断。修正Framework有效EXE名称、单TFM失败丢失其他目标、CLR实现目录误作DeveloperPack。vswhere UTF8与损坏发现工具降级。独立复审Release识别14/14、完整26/26通过零跳过。
+
+**涉及位置**：ProjectInspectionService、SolutionProjectReader、PackagingModels、BuildToolLocator、ProjectFixtures/ProjectInspectionTests。
+
+**对应待办**：P03。
+
+**审查结果**：通过（第2轮），2个审查阻塞和1个父验证边界已修；实际restore/build依赖仍由P05验证。
+
+**Git Commit**：feat(P03): inspect effective desktop project metadata and solution mappings
+
+
+
 ### 2026年10月15日（更新3）
 
 **更新内容**：新增打包模型、工具定位/版本诊断、原子Job归组无窗口执行器、双流日志、取消整树等待和xUnit基础。Release全量12/12通过、0跳过；父先退出后子持锁取消加强用例另通过1/1；独立审查复跑全量12/12通过。
@@ -44,7 +58,7 @@
 
 **审查结果**：通过（第1轮），无阻塞。
 
-**Git Commit**：feat(P02): add job-contained process runner and packaging tool diagnostics
+**Git Commit**：feat(P02): add job-contained process runner and packaging tool diagnostics（236b013）
 
 
 

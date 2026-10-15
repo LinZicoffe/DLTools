@@ -22,12 +22,21 @@ public sealed class BuildToolLocator(IExternalProcessRunner? runner = null)
                 "Microsoft Visual Studio", "Installer", "vswhere.exe");
             if (File.Exists(vswhere))
             {
-                var result = await _runner.RunAsync(vswhere,
-                    ["-latest", "-products", "*", "-requires", "Microsoft.Component.MSBuild", "-find", @"MSBuild\**\Bin\MSBuild.exe"],
-                    Path.GetDirectoryName(vswhere)!, cancellationToken: cancellationToken);
-                if (result.ExitCode == 0)
-                    msbuild = result.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-                        .Select(s => s.Trim()).FirstOrDefault(File.Exists) ?? "";
+                try
+                {
+                    var result = await _runner.RunAsync(vswhere,
+                        ["-utf8", "-latest", "-products", "*", "-requires", "Microsoft.Component.MSBuild", "-find", @"MSBuild\**\Bin\MSBuild.exe"],
+                        Path.GetDirectoryName(vswhere)!, cancellationToken: cancellationToken);
+                    if (result.ExitCode == 0)
+                        msbuild = result.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                            .Select(s => s.Trim()).FirstOrDefault(File.Exists) ?? "";
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+                {
+                    // A broken optional VS discovery tool must not hide dotnet/Inno or disable modern projects.
+                    msbuild = "";
+                }
             }
         }
         return new BuildTools { DotNetPath = dotnet, MsBuildPath = msbuild, InnoCompilerPath = inno };
