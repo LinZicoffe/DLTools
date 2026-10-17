@@ -67,8 +67,10 @@ public class ProjectInspectionTests
         Assert.Equal("WinForms", descriptor.UiFramework);
     }
 
-    [Fact]
-    public async Task SolutionAnyCpuMapping_SelectsActualProjectX86Configuration()
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public async Task SolutionAnyCpuMapping_SelectsActualProjectX86Configuration(string newline)
     {
         using var workspace = new TestWorkspace();
         var project = ProjectFixtures.Framework(workspace, "映射 Forms", extraProperties: "<PlatformTarget>x86</PlatformTarget>");
@@ -89,6 +91,7 @@ public class ProjectInspectionTests
               EndGlobalSection
             EndGlobal
             """);
+        File.WriteAllText(solution, File.ReadAllText(solution).ReplaceLineEndings(newline));
         var item = Assert.Single(await new ProjectInspectionService().InspectAsync(solution, await Tools.Value));
         Assert.True(item.IsSupported, item.UnsupportedReason);
         Assert.Equal("x86", item.Platform);
@@ -193,8 +196,10 @@ public class ProjectInspectionTests
         Assert.Contains("开发包", item.UnsupportedReason);
     }
 
-    [Fact]
-    public async Task MissingSolutionActiveCfg_IsNotGuessedFromSolutionPlatform()
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public async Task MissingSolutionActiveCfg_IsNotGuessedFromSolutionPlatform(string newline)
     {
         using var workspace = new TestWorkspace();
         var project = ProjectFixtures.Framework(workspace, "NoMapping");
@@ -208,6 +213,7 @@ public class ProjectInspectionTests
               EndGlobalSection
             EndGlobal
             """);
+        File.WriteAllText(solution, File.ReadAllText(solution).ReplaceLineEndings(newline));
         var item = Assert.Single(await new ProjectInspectionService().InspectAsync(solution, await Tools.Value));
         Assert.False(item.IsSupported);
         Assert.Contains("ActiveCfg", item.UnsupportedReason);

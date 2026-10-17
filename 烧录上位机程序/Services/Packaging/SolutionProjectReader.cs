@@ -10,7 +10,7 @@ internal static class SolutionProjectReader
     {
         var text = File.ReadAllText(path);
         var configurations = Regex.Matches(text,
-            @"(?m)^\s*(?<config>[^\r\n=]+\|[^\r\n=]+)\s*=\s*[^\r\n]+$")
+            @"(?m)^\s*(?<config>[^\r\n=]+\|[^\r\n=]+)\s*=\s*[^\r\n]+\r?$")
             .Select(m => m.Groups["config"].Value.Trim())
             .Where(s => s.StartsWith("Release|", StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase)
