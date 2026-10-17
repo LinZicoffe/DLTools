@@ -25,6 +25,7 @@
 
     <!-- GBK 等编码支持（System.Text.Encoding 4.3.0 为 netstandard 时代遗留冗余包，已移除） -->
     <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
 
     <!-- 图标 -->
     <PackageReference Include="Material.Icons.WPF" Version="3.0.0" />
