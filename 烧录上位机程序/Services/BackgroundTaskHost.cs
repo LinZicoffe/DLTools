@@ -3,7 +3,8 @@ namespace 烧录上位机程序.Services;
 public enum BackgroundOperationKind
 {
     Flashing,
-    Packaging
+    Packaging,
+    Authorization
 }
 
 /// <summary>Application-wide exclusive ownership, held until the actual operation task terminates.</summary>

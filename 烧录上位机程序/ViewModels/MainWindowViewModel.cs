@@ -8,19 +8,23 @@ public partial class MainWindowViewModel : ObservableObject
 {
     private readonly FlashPage _flashPage = new();
     private readonly PackagingPage _packagingPage = new();
+    private readonly OfflineAuthorizationPage _authorizationPage = new();
 
     public MainWindowViewModel() => CurrentPage = _flashPage;
 
     [ObservableProperty] private BasePage? _currentPage;
     public bool IsFlashSelected => ReferenceEquals(CurrentPage, _flashPage);
     public bool IsPackagingSelected => ReferenceEquals(CurrentPage, _packagingPage);
+    public bool IsAuthorizationSelected => ReferenceEquals(CurrentPage, _authorizationPage);
 
     partial void OnCurrentPageChanged(BasePage? value)
     {
         OnPropertyChanged(nameof(IsFlashSelected));
         OnPropertyChanged(nameof(IsPackagingSelected));
+        OnPropertyChanged(nameof(IsAuthorizationSelected));
     }
 
     [RelayCommand] private void ShowFlash() => CurrentPage = _flashPage;
     [RelayCommand] private void ShowPackaging() => CurrentPage = _packagingPage;
+    [RelayCommand] private void ShowAuthorization() => CurrentPage = _authorizationPage;
 }

@@ -63,7 +63,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                     flashing
                         ? I18nService.GetString("烧录进行中，强制退出可能使芯片停留在半擦除/半写入状态") + "\n" +
                           I18nService.GetString("确定要停止烧录并退出吗？")
-                        : "项目检查或打包任务正在进行。确定取消任务，等待进程结束及文件恢复后退出吗？",
+                        : host.CurrentKind == BackgroundOperationKind.Authorization
+                            ? "授权档案任务正在进行。确定取消任务，等待安全保存结束后退出吗？"
+                            : "项目检查或打包任务正在进行。确定取消任务，等待进程结束及文件恢复后退出吗？",
                     I18nService.GetString("确认退出"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
             }
             catch (Exception error)
