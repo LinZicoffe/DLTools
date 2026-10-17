@@ -4,9 +4,10 @@
 
 `DL小工具.sln` contains the Windows x64 .NET 8 WPF application and tests. Retain the source directory and namespace `烧录上位机程序`.
 
-- `Pages/` contains cached flashing and packaging pages; `ViewModels/` holds observable state.
+- `Pages/` contains cached flashing, packaging, and offline authorization pages; `ViewModels/` holds observable state.
 - `Models/Packaging/` defines project descriptors, options, and results. Firmware parsers remain independent of WPF.
 - `Services/Packaging/` handles inspection, processes, recovery, installers, and profiles; `Services/JLink/` owns probe operations.
+- `Services/Authorization/` computes six-digit responses and protects profiles/backups. Keep keys out of bindings, logs, fixtures, and clipboard; use public test keys only.
 - `Resources/` contains shared styles and translations. `tests/DLTools.Tests/` uses xUnit; `tests/ProcessTestHost/` supplies process fixtures.
 - `docs/` stores implementation, review, and acceptance records. The root feature log tracks checkpoints.
 
@@ -37,4 +38,4 @@ Use focused subjects such as `feat(P06): ...`, `fix(hex): ...`, or `docs: ...`. 
 
 ## Task & File Safety
 
-Register background operations with `BackgroundTaskHost`; run tools through `ExternalProcessRunner`. Preserve solution mappings, original scripts, recovery journals, and stable AppIds. Keep `%APPDATA%/JLinkRTTViewer/` flashing preferences compatible; packaging uses its separate `packaging/` subtree.
+Register background operations with `BackgroundTaskHost`; run tools through `ExternalProcessRunner`. Preserve solution mappings, original scripts, recovery journals, and stable AppIds. Keep `%APPDATA%/JLinkRTTViewer/` flashing preferences compatible; packaging and authorization use separate subtrees. Client throttling and provisioning are separate from the authorization calculator.
