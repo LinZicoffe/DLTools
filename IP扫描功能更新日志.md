@@ -33,6 +33,16 @@
 
 ## 更新记录
 
+### 2026年10月19日（更新4）
+
+**更新内容**：IP扫描功能开发完成，最终三名全新Reviewer并行检查全功能与现有架构，第1轮全部通过，无阻塞。
+
+**完成情况**：I01～I03全部已完成；Release构建0警告0错误；全套175通过、0失败、20项既有集成按开关跳过；真实LAN扫描与生产Ping取消已验证；截图、README、验收及评审记录完整。非阻塞建议和人工验收边界保留在记录中。
+
+**最终状态**：开发完成。所有功能代码已提交到codex/ip-scan，工作树干净；不推送、不合并，原目录他人修改保持原状。
+
+**Git Commit**：chore: complete IP scan development
+
 ### 2026年10月19日（更新3）
 
 **更新内容**：增加回调异常/取消及UI迟到结果测试，实网完整扫描与取消验证，README、截图、验收与评审记录。Release 0警告0错误；全套175通过0失败20既有集成跳过。真实GUI一轮8台；最终服务轮254地址、3708ms发现12台，8ms请求取消491ms终态后无新增回调。
@@ -43,7 +53,7 @@
 
 **审查结果**：第1轮指出取消测试时间竞态；已修正为首次真实进度触发取消，第2轮新Reviewer通过，无阻塞。单测回调等待可增加显式5秒上限为非阻塞建议，记录于评审文档。
 
-**Git Commit**：feat(I03): validate IP scanning on LAN and document acceptance
+**Git Commit**：feat(I03): validate IP scanning on LAN and document acceptance（9a54b28）
 
 
 ### 2026年10月19日（更新2）
