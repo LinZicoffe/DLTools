@@ -1,0 +1,68 @@
+<Window x:Class="OfflineAuthorization.Wpf.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="WPF · 六位离线授权 DEMO" Width="920" Height="820" MinWidth="820" MinHeight="680"
+        WindowStartupLocation="CenterScreen" Background="#F3F5F9" FontFamily="Microsoft YaHei UI" FontSize="14"
+        Loaded="Window_Loaded" Closing="Window_Closing">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="Margin" Value="0,0,12,0"/>
+            <Setter Property="MinHeight" Value="38"/>
+            <Setter Property="MinWidth" Value="110"/>
+        </Style>
+        <Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style>
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="White"/><Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="20"/><Setter Property="Margin" Value="0,0,0,16"/>
+        </Style>
+        <Style x:Key="Heading" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold"/><Setter Property="FontSize" Value="17"/>
+            <Setter Property="Margin" Value="0,0,0,12"/>
+        </Style>
+    </Window.Resources>
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="26">
+            <TextBlock Text="WPF 离线授权演示" FontSize="27" FontWeight="SemiBold" Margin="0,0,0,8"/>
+            <TextBlock Text="全程离线：读取六位申请码 → 在 DL小工具中计算 → 输入六位授权码。" Foreground="#505970" Margin="0,0,0,20"/>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="1  配对测试档案" Style="{StaticResource Heading}"/>
+                    <TextBlock Text="首次使用：导出测试档案，在 DL小工具 → 离线授权 → 恢复档案中导入一次。选择“DEMO公开测试设备（禁止生产使用）”，不要新建随机档案。" Margin="0,0,0,12"/>
+                    <Button x:Name="ExportButton" Content="导出生成器测试档案" Click="Export_Click" HorizontalAlignment="Left"/>
+                    <TextBlock x:Name="PasswordText" Margin="0,12,0,5"/>
+                    <TextBlock x:Name="DeviceText" Foreground="#505970"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="2  提供申请码并输入授权码" Style="{StaticResource Heading}"/>
+                    <WrapPanel Margin="0,0,0,12">
+                        <TextBox x:Name="ChallengeBox" IsReadOnly="True" FontFamily="Consolas" FontSize="30" Width="180" Padding="10,3" Margin="0,0,16,0" AutomationProperties.Name="六位申请码"/>
+                        <Button Content="复制申请码" Click="Copy_Click"/>
+                    </WrapPanel>
+                    <WrapPanel Margin="0,0,0,12">
+                        <TextBox x:Name="ResponseBox" MaxLength="6" FontFamily="Consolas" FontSize="30" Width="180" Padding="10,3" Margin="0,0,16,0" AutomationProperties.Name="六位授权码"/>
+                        <Button x:Name="ActivateButton" Content="确认授权" Click="Activate_Click"/>
+                    </WrapPanel>
+                    <WrapPanel>
+                        <Button x:Name="RenewButton" Content="更换申请码" Click="Renew_Click"/>
+                        <Button Content="刷新状态" Click="Refresh_Click"/>
+                    </WrapPanel>
+                    <TextBlock x:Name="StatusText" Margin="0,16,0,0" Foreground="#174A86" AutomationProperties.Name="授权状态"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="3  测试授权后的功能" Style="{StaticResource Heading}"/>
+                    <WrapPanel>
+                        <Button x:Name="FeatureButton" Content="运行受控演示功能" Click="Feature_Click"/>
+                        <Button x:Name="ResetButton" Content="重置测试授权" Click="Reset_Click"/>
+                    </WrapPanel>
+                    <TextBlock Margin="0,16,0,0" Foreground="#735D32" Text="仅供测试：使用公开测试密钥。重置会清除本 DEMO 的激活和限次，不能作为正式产品入口。两套 DEMO 的状态独立保存，重启会保留；不会修改 DL小工具的真实档案。"/>
+                </StackPanel>
+            </Border>
+            <TextBlock x:Name="PathText" Foreground="#505970" FontSize="12"/>
+        </StackPanel>
+    </ScrollViewer>
+</Window>

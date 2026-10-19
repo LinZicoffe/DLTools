@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <!-- Compile the actual generator protocol/store without a WPF or J-Link runtime dependency. -->
+    <Compile Include="../../烧录上位机程序/Services/Authorization/*.cs" Link="Generator/%(Filename)%(Extension)" />
+    <Compile Include="../../烧录上位机程序/Models/Authorization/AuthorizationProfile.cs" Link="Generator/AuthorizationProfile.cs" />
+    <Compile Include="../../烧录上位机程序/Services/BackgroundTaskHost.cs" Link="Infrastructure/BackgroundTaskHost.cs" />
+  </ItemGroup>
+</Project>

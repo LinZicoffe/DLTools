@@ -1,0 +1,19 @@
+# 构建产物
+bin/
+obj/
+TestResults/
+
+# IDE / 工具缓存
+.vs/
+.mimosa/
+*.user
+*.suo
+
+# Windows 保留名残留文件（历史误创建）
+nul
+
+# 用户实测打包输出目录
+Output/
+
+# 我方离线授权档案加密备份（包含设备密钥，不提交）
+*.dlauth

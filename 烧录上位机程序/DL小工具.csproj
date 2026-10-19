@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>烧录上位机程序</RootNamespace>
+    <AssemblyName>DL小工具</AssemblyName>
+    <Product>DL小工具</Product>
+    <Title>DL小工具</Title>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <!-- JLink_x64.dll 仅有 64 位；不固定平台时在 32 位/ARM64 宿主上
+         只会得到歧义的错误码 193（"不是有效的 Win32 应用程序"） -->
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WPF-UI: Fluent 2 风格控件库 -->
+    <PackageReference Include="WPF-UI" Version="3.1.0" />
+
+    <!-- MVVM 框架：CommunityToolkit.Mvvm 源生成器 -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
+
+    <!-- GBK 等编码支持（System.Text.Encoding 4.3.0 为 netstandard 时代遗留冗余包，已移除） -->
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+
+    <!-- 图标 -->
+    <PackageReference Include="Material.Icons.WPF" Version="3.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- i18n 翻译文件：始终复制到输出目录 -->
+    <None Update="Resources\i18n\*.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
