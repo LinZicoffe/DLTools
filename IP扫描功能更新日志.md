@@ -33,6 +33,18 @@
 
 ## 更新记录
 
+### 2026年10月19日（更新6）
+
+**更新内容**：已从10502b2快进合并至3cceb2c，主目录停在main。合并后Release构建0警告0错误，普通测试173通过、0失败、22集成测试跳过（195项）；证据IPScan-main-postmerge.trx。未重跑实网，保留原实网批次175通过的记录。
+
+**文件保护**：README原始字节已备份，加入扫描说明后仍保留为未提交修改；融合操作可逆还原原始README全部字节。6个原有未跟踪文件与13份迁移测试证据均逐文件校验SHA-256一致。无暂存用户文件、无stash/reset/clean。
+
+**工作树清理**：应用archive_worktree接口仅返回queued且未落地，改用git worktree remove清理已合并且干净的本次工作树。删除前核验绝对路径、功能分支已并入main、证据迁移校验；删除后git worktree list仅剩主目录，原路径不存在。保留已合并的codex/ip-scan分支以便恢复；未推送远程。
+
+**涉及位置**：IP扫描功能更新日志.md；docs/验收记录-IP扫描.md。
+
+**Git Commit**：docs: record IP scan main merge validation
+
 ### 2026年10月19日（更新5）
 
 **更新内容**：用户反馈“测试发现，符合预期”，授权合并主分支并清理本次工作树。按快进合并处理，主目录已有README说明与图标/教程等文件继续保留为原来的未提交工作，不混入功能提交。
@@ -41,9 +53,9 @@
 
 **验收结果**：用户验收符合预期；先前未逐项实测的边界仍保留记录。
 
-**交接记录**：合并前测试证据迁至主目录 tests/DLTools.Tests/TestResults/IP扫描-20261019-合并证据/；README原始备份及文件校验清单位于主仓库 .git/codex-safety/ip-scan-merge-20261019/。本次工作树使用应用归档工具清理，保留可恢复快照；不推送远程。
+**交接记录**：合并前测试证据迁至主目录 tests/DLTools.Tests/TestResults/IP扫描-20261019-合并证据/；README原始备份及文件校验清单位于主仓库 .git/codex-safety/ip-scan-merge-20261019/。原计划通过应用归档工具清理，实际处理见更新6；不推送远程。
 
-**Git Commit**：docs: record IP scan user acceptance and merge authorization
+**Git Commit**：docs: record IP scan user acceptance and merge authorization（3cceb2c）
 
 ### 2026年10月19日（更新4）
 
