@@ -8,7 +8,7 @@
 
 1. 保留命名空间与源目录；纯服务使用 System.Net.NetworkInformation.Ping，不运行外部 ping。
 2. 32 并发、500ms 单目标超时；BackgroundTaskHost 全局互斥，取消后等待所有在途操作退出。
-3. 基线 main / 10502b2；隔离工作树、分支 codex/ip-scan。不推送、不合并。
+3. 基线 main / 10502b2；隔离工作树、分支 codex/ip-scan。开发阶段不推送、不合并；2026-10-19用户验收后明确授权合并main并清理本次工作树。
 4. 原目录已有 README.md 修改及 .zcodeignore、DLTools_icon*、打包教程.md 未跟踪文件全部留在原处，排除于本任务与审查。
 
 ## 待办列表
@@ -33,6 +33,18 @@
 
 ## 更新记录
 
+### 2026年10月19日（更新5）
+
+**更新内容**：用户反馈“测试发现，符合预期”，授权合并主分支并清理本次工作树。按快进合并处理，主目录已有README说明与图标/教程等文件继续保留为原来的未提交工作，不混入功能提交。
+
+**涉及位置**：IP扫描功能更新日志.md；docs/验收记录-IP扫描.md。
+
+**验收结果**：用户验收符合预期；先前未逐项实测的边界仍保留记录。
+
+**交接记录**：合并前测试证据迁至主目录 tests/DLTools.Tests/TestResults/IP扫描-20261019-合并证据/；README原始备份及文件校验清单位于主仓库 .git/codex-safety/ip-scan-merge-20261019/。本次工作树使用应用归档工具清理，保留可恢复快照；不推送远程。
+
+**Git Commit**：docs: record IP scan user acceptance and merge authorization
+
 ### 2026年10月19日（更新4）
 
 **更新内容**：IP扫描功能开发完成，最终三名全新Reviewer并行检查全功能与现有架构，第1轮全部通过，无阻塞。
@@ -41,7 +53,7 @@
 
 **最终状态**：开发完成。所有功能代码已提交到codex/ip-scan，工作树干净；不推送、不合并，原目录他人修改保持原状。
 
-**Git Commit**：chore: complete IP scan development
+**Git Commit**：chore: complete IP scan development（aa2f9b6）
 
 ### 2026年10月19日（更新3）
 
