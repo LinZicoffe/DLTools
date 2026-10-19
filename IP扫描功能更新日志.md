@@ -16,7 +16,7 @@
 | ID | 待办描述 | 预计代码位置 | 状态 |
 |----|----------|--------------|------|
 | I01 | 纯扫描服务、网段/网卡校验、并发/取消/超时测试 | Services/IpScanService.cs；tests/DLTools.Tests/IpScanServiceTests.cs | 已完成 |
-| I02 | 页面与 VM、导航/关窗接入及状态测试 | Pages/IpScanPage.*；ViewModels/IpScanViewModel.cs；MainWindow*；BackgroundTaskHost.cs | 未开始 |
+| I02 | 页面与 VM、导航/关窗接入及状态测试 | Pages/IpScanPage.*；ViewModels/IpScanViewModel.cs；MainWindow*；BackgroundTaskHost.cs | 已完成 |
 | I03 | 完整构建测试、真机局域网验证、使用说明与验收记录 | README.md；docs/验收记录-IP扫描.md | 未开始 |
 
 ## 已知风险
@@ -33,6 +33,19 @@
 
 ## 更新记录
 
+### 2026年10月19日（更新2）
+
+**更新内容**：新增缓存扫描页面、MVVM增量结果与进度、全局任务互斥及关窗取消。目标测试42/42通过（I02-ipscan.trx）。
+
+**涉及位置**：Pages/IpScanPage.*；ViewModels/IpScanViewModel.cs；MainWindow*；BackgroundTaskHost.cs；IpScanViewModelTests.cs。
+
+**对应待办**：I02。
+
+**审查结果**：第1轮通过，无阻塞。建议在I03验证排队UI回调取消、切页及关窗选择。
+
+**Git Commit**：feat(I02): integrate IP scan page and background lifecycle
+
+
 ### 2026年10月19日（更新1）
 
 **更新内容**：纯逻辑扫描服务及33项测试通过（I01-ipscan.trx）。
@@ -43,5 +56,6 @@
 
 **审查结果**：第1轮通过，无阻塞。网卡筛选尚需真机验证；回调异常/等待期间取消可补充测试，列入I03。
 
-**Git Commit**：feat(I01): add cancellable IPv4 subnet scan service
+**Git Commit**：feat(I01): add cancellable IPv4 subnet scan service（d4e69f9）
+
 

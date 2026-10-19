@@ -180,7 +180,7 @@ public partial class OfflineAuthorizationViewModel : ObservableObject
         {
             if (!_host.TryStart(BackgroundOperationKind.Authorization, action, out var task))
             {
-                Status = "另一个烧录、打包或档案任务正在进行，请等待结束后重试。";
+                Status = "另一个后台任务正在进行，请等待结束后重试。";
                 return;
             }
             _ownsOperation = true;

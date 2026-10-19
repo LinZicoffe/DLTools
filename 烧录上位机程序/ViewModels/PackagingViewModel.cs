@@ -374,7 +374,7 @@ public partial class PackagingViewModel : ObservableObject
         {
             if (!BackgroundTaskHost.Shared.TryStart(BackgroundOperationKind.Packaging, operation, out var task))
             {
-                Status = "另一个任务正在运行，请等待烧录或打包任务真正结束。";
+                Status = "另一个后台任务正在运行，请等待任务真正结束。";
                 return false;
             }
             _ownedTask = task;
