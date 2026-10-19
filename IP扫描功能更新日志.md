@@ -17,12 +17,12 @@
 |----|----------|--------------|------|
 | I01 | 纯扫描服务、网段/网卡校验、并发/取消/超时测试 | Services/IpScanService.cs；tests/DLTools.Tests/IpScanServiceTests.cs | 已完成 |
 | I02 | 页面与 VM、导航/关窗接入及状态测试 | Pages/IpScanPage.*；ViewModels/IpScanViewModel.cs；MainWindow*；BackgroundTaskHost.cs | 已完成 |
-| I03 | 完整构建测试、真机局域网验证、使用说明与验收记录 | README.md；docs/验收记录-IP扫描.md | 未开始 |
+| I03 | 完整构建测试、真机局域网验证、使用说明与验收记录 | README.md；docs/验收记录-IP扫描.md | 已完成 |
 
 ## 已知风险
 
 1. ICMP 禁用或 500ms 内未回复不等同设备不存在；空结果需明确提示。
-2. 真机局域网及 UI 验证尚未执行，不用单元测试代替。
+2. 已完成真实WLAN完整扫描与生产Ping取消；GUI忙碌关窗确认、GUI取消动作、全离线网卡、最小窗口及150% DPI尚未单独实测，详见验收记录。
 
 ## 其他
 
@@ -32,6 +32,19 @@
 ---
 
 ## 更新记录
+
+### 2026年10月19日（更新3）
+
+**更新内容**：增加回调异常/取消及UI迟到结果测试，实网完整扫描与取消验证，README、截图、验收与评审记录。Release 0警告0错误；全套175通过0失败20既有集成跳过。真实GUI一轮8台；最终服务轮254地址、3708ms发现12台，8ms请求取消491ms终态后无新增回调。
+
+**涉及位置**：README.md；docs/验收记录-IP扫描.md；docs/评审记录-IP扫描.md；docs/images/ip-scan-ui.png；IpScan*Tests.cs。
+
+**对应待办**：I03。
+
+**审查结果**：第1轮指出取消测试时间竞态；已修正为首次真实进度触发取消，第2轮新Reviewer通过，无阻塞。单测回调等待可增加显式5秒上限为非阻塞建议，记录于评审文档。
+
+**Git Commit**：feat(I03): validate IP scanning on LAN and document acceptance
+
 
 ### 2026年10月19日（更新2）
 
@@ -43,7 +56,7 @@
 
 **审查结果**：第1轮通过，无阻塞。建议在I03验证排队UI回调取消、切页及关窗选择。
 
-**Git Commit**：feat(I02): integrate IP scan page and background lifecycle
+**Git Commit**：feat(I02): integrate IP scan page and background lifecycle（11ca446）
 
 
 ### 2026年10月19日（更新1）
@@ -57,5 +70,3 @@
 **审查结果**：第1轮通过，无阻塞。网卡筛选尚需真机验证；回调异常/等待期间取消可补充测试，列入I03。
 
 **Git Commit**：feat(I01): add cancellable IPv4 subnet scan service（d4e69f9）
-
-

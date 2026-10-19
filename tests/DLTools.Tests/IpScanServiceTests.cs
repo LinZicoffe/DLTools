@@ -176,4 +176,41 @@ public class IpScanServiceTests
         Assert.Equal(0, active);
         Assert.Equal(32, started);
     }
+
+    [Fact]
+    public async Task ReportFailure_DrainsWorkersBeforeReturningError()
+    {
+        var active = 0;
+        var service = new IpScanService(async (_, _, token) =>
+        {
+            Interlocked.Increment(ref active);
+            try { await Task.Delay(10, token); return new(IpProbeStatus.Reachable, 1); }
+            finally { Interlocked.Decrement(ref active); }
+        }, _ => { });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ScanAsync("192.168.1.1",
+            _ => throw new InvalidOperationException("UI report failed"), CancellationToken.None));
+        Assert.Equal(0, active);
+    }
+
+    [Fact]
+    public async Task CancelDuringReport_WaitsForCallbackAndSuppressesQueuedReports()
+    {
+        using var cancel = new CancellationTokenSource();
+        var reporting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var count = 0;
+        var service = new IpScanService((_, _, _) => Task.FromResult(new IpProbeResult(IpProbeStatus.Reachable, 1)), _ => { });
+        var scan = service.ScanAsync("192.168.1.1", async _ =>
+        {
+            Interlocked.Increment(ref count);
+            reporting.SetResult();
+            await release.Task;
+        }, cancel.Token);
+        await reporting.Task;
+        cancel.Cancel();
+        Assert.False(scan.IsCompleted);
+        release.SetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => scan.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(1, count);
+    }
 }

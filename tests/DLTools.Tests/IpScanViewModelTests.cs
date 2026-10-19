@@ -182,6 +182,27 @@ public class IpScanViewModelTests
         Assert.True(vm.ScanCommand.CanExecute(null));
     });
 
+    [Fact]
+    public Task CancelBeforeQueuedUiCallback_DoesNotAppendLateDevice() => OnStaAsync(async () =>
+    {
+        using var queued = new ManualResetEventSlim();
+        var vm = new IpScanViewModel(new StubService(async (_, report, token) =>
+        {
+            var callback = report(new(1, IPAddress.Parse("192.168.1.1"), new(IpProbeStatus.Reachable, 1)));
+            queued.Set();
+            await callback;
+            token.ThrowIfCancellationRequested();
+        }), new()) { InputIp = "192.168.1.99" };
+        var scan = vm.ScanCommand.ExecuteAsync(null);
+        // Intentionally hold the UI dispatcher until the worker has queued its callback.
+        Assert.True(queued.Wait(TimeSpan.FromSeconds(5)));
+        vm.CancelCommand.Execute(null);
+        await scan;
+        Assert.Empty(vm.Devices);
+        Assert.Equal(0, vm.Completed);
+        Assert.Contains("已取消", vm.Status);
+    });
+
     private sealed class StubService(Func<string, Func<IpScanProgress, Task>, CancellationToken, Task> scan) : IIpScanService
     {
         public Task ScanAsync(string input, Func<IpScanProgress, Task> reportAsync, CancellationToken cancellationToken) =>
