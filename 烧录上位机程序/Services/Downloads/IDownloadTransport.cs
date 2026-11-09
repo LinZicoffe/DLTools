@@ -23,8 +23,11 @@ public sealed class DownloadTransportException : Exception
 /// <param name="Url">目标地址。</param>
 /// <param name="RangeStart">Range 起点（含）；null 表示不带 Range 的整段请求。</param>
 /// <param name="RangeEnd">Range 终点（含）。</param>
-/// <param name="IfRangeETag">续传时的 If-Range 校验值，服务器资源已变更则返回 200 而非 206。</param>
-public sealed record TransportRequest(string Url, long? RangeStart, long? RangeEnd, string? IfRangeETag);
+/// <param name="IfRangeETag">续传时的 If-Range 校验值（ETag 或 Last-Modified 日期串），
+/// 服务器资源已变更则返回 200 而非 206。</param>
+/// <param name="EnforcePublicHttps">镜像清单链路：本请求及其重定向的每一跳都必须 https 公网。</param>
+public sealed record TransportRequest(string Url, long? RangeStart, long? RangeEnd, string? IfRangeETag,
+    bool EnforcePublicHttps = false);
 
 /// <param name="StatusCode">HTTP 状态码。非 2xx 时 Content 为空流，由调用方分类处理。</param>
 /// <param name="ContentRange">206 响应的 Content-Range 原始值（如 "bytes 0-0/123"）。</param>

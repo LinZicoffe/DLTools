@@ -25,12 +25,14 @@ public sealed class FakeDownloadTransport : IDownloadTransport
     }
 
     public static TransportResponse OkFull(long totalLength, byte[] body,
-        string contentType = "application/octet-stream", string etag = "\"v1\"", string disposition = "") =>
-        new(200, contentType, etag, "", null, totalLength, disposition, null, new MemoryStream(body));
+        string contentType = "application/octet-stream", string etag = "\"v1\"", string disposition = "",
+        string lastModified = "") =>
+        new(200, contentType, etag, lastModified, null, totalLength, disposition, null, new MemoryStream(body));
 
+    /// <param name="body">响应体。允许故意短于 [start,end] 区间以模拟连接中途截断（引擎按段重试）。</param>
     public static TransportResponse Partial(long totalLength, long start, long end, byte[] body,
-        string etag = "\"v1\"", string disposition = "") =>
-        new(206, "application/octet-stream", etag, "",
+        string etag = "\"v1\"", string disposition = "", string lastModified = "") =>
+        new(206, "application/octet-stream", etag, lastModified,
             $"bytes {start}-{end}/{totalLength}", body.Length, disposition, null, new MemoryStream(body));
 
     public static TransportResponse RateLimited(int retryAfterSeconds) =>

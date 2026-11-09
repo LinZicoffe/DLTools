@@ -170,6 +170,40 @@ public class DownloadViewModelTests : IDisposable
         }
     });
 
+    [Fact]
+    public Task RemoveRunningTask_FromRowCommand_SwallowsSchedulerRefusal() => OnStaAsync(async () =>
+    {
+        // 行状态经 Dispatcher 投递可能滞后，行内"移除"可能在任务已运行时被点到：
+        // 调度器的拒绝必须被命令吞掉，不允许穿透到全局未处理异常弹窗
+        var server = new FakeSegmentServer(TestData(512 * 1024));
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = new FakeDownloadTransport(async (request, ct) =>
+        {
+            if (request.RangeEnd != 0) await gate.Task.WaitAsync(ct); // 闸住传输让任务保持运行
+            return server.Serve(request);
+        });
+        var scheduler = new DownloadScheduler(() => new DownloadEngine(transport,
+            retryDelay: (_, _) => Task.CompletedTask), maxConcurrentTasks: 2);
+        var vm = new DownloadViewModel(scheduler, Path.Combine(_workspace.Root, "settings.json"))
+        {
+            DownloadUrl = "http://8.8.8.8/fw.bin",
+            DestinationDirectory = Path.Combine(_workspace.Root, "out")
+        };
+
+        vm.AddDownloadCommand.Execute(null);
+        await WaitForAsync(() => vm.Tasks.Count == 1, "行创建");
+        var task = Assert.Single(scheduler.Tasks);
+        await WaitForAsync(() => task.State is DownloadTaskState.Connecting or DownloadTaskState.Downloading,
+            "任务进入运行态");
+
+        var row = Assert.Single(vm.Tasks);
+        row.RemoveCommand.Execute(null); // 运行中移除：命令内部捕获拒绝，不抛出
+        Assert.Single(scheduler.Tasks); // 任务未被移除
+
+        gate.TrySetResult();
+        await WaitForAsync(() => task.State == DownloadTaskState.Completed, "放行后下载完成");
+    });
+
     private static async Task WaitForAsync(Func<bool> condition, string hint)
     {
         var deadline = Environment.TickCount64 + 10_000;

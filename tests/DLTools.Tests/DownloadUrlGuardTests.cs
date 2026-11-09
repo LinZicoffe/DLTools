@@ -98,6 +98,50 @@ public class DownloadUrlGuardTests
     }
 
     [Fact]
+    public void IsPublicAddress_RejectsNat64AndIpv4CompatibleEmbeddings()
+    {
+        // NAT64 64:ff9b::/96：低 32 位内嵌 IPv4，按内嵌地址递归判定
+        Assert.True(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("64:ff9b::808:808")));   // ≡ 8.8.8.8
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("64:ff9b::a00:1")));    // ≡ 10.0.0.1
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("64:ff9b::7f00:1")));   // ≡ 127.0.0.1
+        // /96 掩码边界：组 4 非 0 的地址不属于 NAT64 段（IANA 未分配，按普通公网地址判定，不递归内嵌 IPv4）
+        Assert.True(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("64:ff9b:0:0:1::808:808")));
+        // RFC 8215 本地用 NAT64 段 64:ff9b:1::/48
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("64:ff9b:1::1")));
+        // 已废弃的 IPv4 兼容形式 ::/96（非 0xFFFF 映射）
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("::a00:1")));           // ≡ 10.0.0.1
+        Assert.True(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("::808:808")));          // ≡ 8.8.8.8
+        // 未指定地址 ::
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("::")));
+    }
+
+    [Fact]
+    public void IsPublicAddress_RejectsIpv6MulticastAndSiteLocal()
+    {
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("ff02::1")));   // 链路本地组播
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("ffb0::1")));  // 组播
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("fec0::1")));  // 站点本地（已废弃仍拒）
+    }
+
+    [Fact]
+    public void IsPublicAddress_RejectsSharedAndDocumentationRanges()
+    {
+        // 100.64/10 CGNAT 共享地址（RFC 6598）
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("100.64.0.1")));
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("100.127.255.254")));
+        Assert.True(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("100.128.0.1")));
+        // 192.0.0.0/24 IETF 协议分配 与 TEST-NET-1/2/3
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("192.0.0.1")));
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("192.0.2.5")));
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("198.51.100.8")));
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("203.0.113.7")));
+        // 198.18/15 基准测试
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("198.18.5.1")));
+        Assert.False(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("198.19.255.1")));
+        Assert.True(DownloadUrlGuard.IsPublicAddress(IPAddress.Parse("198.20.0.1")));
+    }
+
+    [Fact]
     public void FilterMirrorUrls_KeepsOnlyValidPublicHttpsNodesInOrder()
     {
         var allowed = DownloadUrlGuard.FilterMirrorUrls(

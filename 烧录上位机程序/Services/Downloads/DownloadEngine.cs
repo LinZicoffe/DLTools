@@ -113,11 +113,31 @@ public sealed class DownloadEngine
         var state = _state!;
         await state.ReportAsync(DownloadTaskState.Connecting, state.Total, state.Done, 0, "正在连接并探测资源…",
             immediate: true, cancellationToken).ConfigureAwait(false);
-        var probe = await RangeProbe.ProbeAsync(_transport, candidateUrl, cancellationToken).ConfigureAwait(false);
-        if (probe.StatusCode == 200 && probe.ContentType.Contains("text/html", StringComparison.OrdinalIgnoreCase))
+        // 探测与分段请求同级重试：单候选任务不应因一次瞬时 429/5xx/连接抖动整体失败（429 尊重 Retry-After）
+        RangeProbeResult probe;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                probe = await RangeProbe.ProbeAsync(_transport, candidateUrl, cancellationToken,
+                    state.Options.EnforcePublicHttps).ConfigureAwait(false);
+                break;
+            }
+            catch (DownloadTransportException error) when (attempt < _maxAttempts && !error.Terminal)
+            {
+                var backoff = BackoffFor(attempt, error.RetryAfterSeconds);
+                await state.ReportAsync(DownloadTaskState.Connecting, state.Total, state.Done, 0,
+                    $"探测重试（第 {attempt}/{_maxAttempts} 次，{backoff.TotalMilliseconds:0}ms 后）：{error.Message}",
+                    immediate: true, cancellationToken).ConfigureAwait(false);
+                await _retryDelay(backoff, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        if (probe.StatusCode == 200 && probe.ContentType.Contains("text/html", StringComparison.OrdinalIgnoreCase)
+            && !HasExplicitFileName(state.Options, probe))
             throw new DownloadTransportException("服务器返回网页而非文件，可能地址已失效、需要登录或被防盗链拦截。");
 
-        var fileName = ResolveFileName(state.Options, probe, candidateUrl);
+        var fileName = state.DecidedFileName ?? ResolveFileName(state.Options, probe, candidateUrl);
+        state.DecidedFileName = fileName; // 首个候选定名后供 failover 复用，保证续传记录/落盘名跨镜像一致
         var finalPath = Path.Combine(state.Options.DestinationDirectory, fileName);
         state.Total = probe.TotalLength ?? 0;
 
@@ -126,6 +146,10 @@ public sealed class DownloadEngine
             ? await DownloadSegmentedAsync(candidateUrl, probe, finalPath, cancellationToken).ConfigureAwait(false)
             : await DownloadSingleStreamAsync(candidateUrl, probe, finalPath, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>text/html 防盗链启发式只对"没有显式文件名"的响应生效：显式指定/Content-Disposition 命名的 html 允许下载。</summary>
+    private static bool HasExplicitFileName(DownloadOptions options, RangeProbeResult probe) =>
+        !string.IsNullOrWhiteSpace(options.FileNameOverride) || probe.FileNameFromHeader;
 
     private static string ResolveFileName(DownloadOptions options, RangeProbeResult probe, string url)
     {
@@ -160,9 +184,13 @@ public sealed class DownloadEngine
         if (journal is not null)
         {
             segments = journal.ReadSegments().ToArray();
-            var etagCompatible = journal.ETag.Length == 0 || probe.ETag.Length == 0
-                || string.Equals(journal.ETag, probe.ETag, StringComparison.Ordinal);
-            if (!etagCompatible || journal.TotalLength != total || !CoversRange(segments, total))
+            // 新鲜度校验：双侧有 ETag 则必须相等；否则退回 Last-Modified 比对（任一侧缺失即视为已变更），
+            // 防止无验证器的服务器在同长度内容变更后拼出混合版本文件
+            var validatorsCompatible = journal.ETag.Length > 0 && probe.ETag.Length > 0
+                ? string.Equals(journal.ETag, probe.ETag, StringComparison.Ordinal)
+                : journal.LastModified.Length == 0
+                    || string.Equals(journal.LastModified, probe.LastModified, StringComparison.Ordinal);
+            if (!validatorsCompatible || journal.TotalLength != total || !CoversRange(segments, total))
             {
                 var doneSoFar = segments.Sum(segment => segment.Completed);
                 await state.ReportAsync(DownloadTaskState.Downloading, total, doneSoFar, 0,
@@ -181,6 +209,8 @@ public sealed class DownloadEngine
 
         var handle = File.OpenHandle(DownloadJournal.TempPathFor(finalPath), FileMode.Open, FileAccess.Write,
             FileShare.None, FileOptions.Asynchronous);
+        // If-Range 校验值：优先 ETag，其次 Last-Modified（资源已变更时服务器回 200，触发单流重下）
+        var ifRangeValue = probe.ETag.Length > 0 ? probe.ETag : probe.LastModified;
         try
         {
             Interlocked.Exchange(ref state.DoneRaw, segments.Sum(segment => segment.Completed));
@@ -190,25 +220,44 @@ public sealed class DownloadEngine
                 ?? state.DefaultConnections), pending.Length);
             if (workerCount > 0)
             {
-                var pendingQueue = new ConcurrentQueue<int>(pending); // worker 拉段队列：先完成者取下一段，自动负载均衡
+                var pendingQueue = new ConcurrentQueue<int>(pending); // worker 拉段队列：先完成者取下段，自动负载均衡
+                Exception? firstError = null;
+                var rangeIgnored = 0;
                 try
                 {
+                    // 兄弟止损：单段致命失败立即取消其余 worker，避免失败已定后仍把剩余队列拉完
+                    using var failFast = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                     await Task.WhenAll(Enumerable.Range(0, workerCount).Select(_ => Task.Run(async () =>
                     {
                         while (pendingQueue.TryDequeue(out var segmentIndex))
                         {
-                            await TransferSegmentAsync(candidateUrl, journal, segments, segmentIndex, handle,
-                                probe.ETag, cancellationToken).ConfigureAwait(false);
+                            try
+                            {
+                                await TransferSegmentAsync(candidateUrl, journal, segments, segmentIndex, handle,
+                                    ifRangeValue, failFast.Token).ConfigureAwait(false);
+                            }
+                            catch (Exception error) when (error is not OperationCanceledException)
+                            {
+                                if (error is RangeIgnoredException) Volatile.Write(ref rangeIgnored, 1);
+                                else Interlocked.CompareExchange(ref firstError, error, null);
+                                failFast.Cancel();
+                                throw;
+                            }
                         }
-                    }, cancellationToken))).ConfigureAwait(false);
+                    }, failFast.Token))).ConfigureAwait(false);
                 }
-                catch (RangeIgnoredException)
+                catch (Exception error)
                 {
-                    handle.Dispose();
-                    await state.ReportAsync(DownloadTaskState.Downloading, total, 0, 0,
-                        "服务器忽略 Range 请求，转为单线程顺序下载。", immediate: true, cancellationToken).ConfigureAwait(false);
-                    return await DownloadSingleStreamAsync(candidateUrl, probe, finalPath, cancellationToken)
-                        .ConfigureAwait(false);
+                    if (Volatile.Read(ref rangeIgnored) == 1)
+                    {
+                        handle.Dispose();
+                        await state.ReportAsync(DownloadTaskState.Downloading, total, 0, 0,
+                            "服务器忽略 Range 请求，转为单线程顺序下载。", immediate: true, cancellationToken).ConfigureAwait(false);
+                        return await DownloadSingleStreamAsync(candidateUrl, probe, finalPath, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    if (cancellationToken.IsCancellationRequested) throw; // 真取消/暂停：保持 OCE 语义上抛
+                    throw Volatile.Read(ref firstError) ?? error; // 兄弟止损引发的 OCE 换回首个真实失败
                 }
             }
 
@@ -222,22 +271,26 @@ public sealed class DownloadEngine
         {
             handle.Dispose();
             // 异常/取消出口统一落盘一次最新分段表（提交成功后日志已删除，跳过）。
-            if (File.Exists(DownloadJournal.JournalPathFor(finalPath)) && segments is not null)
+            if (File.Exists(DownloadJournal.JournalPathFor(finalPath)))
                 journal?.SaveSegments(segments);
         }
     }
 
-    /// <summary>单个 worker 的一个分段传输：带重试/退避的完整收尾。RangeIgnored 与终态错误直接上抛。</summary>
+    /// <summary>单个 worker 的一个分段传输：带重试/退避的完整收尾。RangeIgnored 与终态错误直接上抛。
+    /// 重试预算按"零进度连续失败"计算：截断但有推进（代理按字节掐断等）时重置预算，避免健康下载被上限误杀。</summary>
     private async Task TransferSegmentAsync(string candidateUrl, DownloadJournal journal,
-        DownloadSegment[] segments, int segmentIndex, SafeFileHandle handle, string probeETag,
+        DownloadSegment[] segments, int segmentIndex, SafeFileHandle handle, string ifRangeValue,
         CancellationToken cancellationToken)
     {
+        const int maxTotalFailures = 1000; // 有进度重置的绝对上限，防病态服务器 1 字节/次拖死任务
         var state = _state!;
+        var progressMark = segments[segmentIndex].Completed;
+        var totalFailures = 0;
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                await CopySegmentAsync(candidateUrl, journal, segments, segmentIndex, handle, probeETag,
+                await CopySegmentAsync(candidateUrl, journal, segments, segmentIndex, handle, ifRangeValue,
                     cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -249,11 +302,19 @@ public sealed class DownloadEngine
             {
                 throw;
             }
-            catch (DownloadTransportException error) when (attempt < _maxAttempts && !error.Terminal)
+            catch (DownloadTransportException error)
             {
-                var backoff = BackoffFor(attempt, error.RetryAfterSeconds);
+                if (error.Terminal) throw;
+                totalFailures++;
+                var current = segments[segmentIndex].Completed;
+                var madeProgress = current > progressMark;
+                progressMark = current;
+                if (madeProgress) attempt = 0; // 有进度：连续零失败计数从头再来
+                else if (attempt >= _maxAttempts || totalFailures >= maxTotalFailures) throw;
+                var attemptForBackoff = madeProgress ? 1 : attempt;
+                var backoff = BackoffFor(attemptForBackoff, error.RetryAfterSeconds);
                 await state.ReportAsync(DownloadTaskState.Downloading, state.Total, state.Done, state.ActiveSegments,
-                    $"分段重试（第 {attempt}/{_maxAttempts} 次，{backoff.TotalMilliseconds:0}ms 后）：{error.Message}",
+                    $"分段重试（第 {attemptForBackoff}/{_maxAttempts} 次，{backoff.TotalMilliseconds:0}ms 后）：{error.Message}",
                     immediate: true, cancellationToken).ConfigureAwait(false);
                 await _retryDelay(backoff, cancellationToken).ConfigureAwait(false);
             }
@@ -273,22 +334,20 @@ public sealed class DownloadEngine
     }
 
     private async Task CopySegmentAsync(string candidateUrl, DownloadJournal journal, DownloadSegment[] segments,
-        int segmentIndex, SafeFileHandle handle, string probeETag, CancellationToken cancellationToken)
+        int segmentIndex, SafeFileHandle handle, string ifRangeValue, CancellationToken cancellationToken)
     {
         var state = _state!;
         var segment = segments[segmentIndex];
         var requestStart = segment.Start + segment.Completed;
-        var ifRange = string.IsNullOrEmpty(probeETag) ? null : probeETag;
+        var ifRange = string.IsNullOrEmpty(ifRangeValue) ? null : ifRangeValue;
         var response = await _transport.SendAsync(
-            new TransportRequest(candidateUrl, requestStart, segment.End, ifRange), cancellationToken)
-            .ConfigureAwait(false);
+            new TransportRequest(candidateUrl, requestStart, segment.End, ifRange, state.Options.EnforcePublicHttps),
+            cancellationToken).ConfigureAwait(false);
         await using (response.ConfigureAwait(false))
         {
             if (response.StatusCode == 200) throw new RangeIgnoredException();
             if (response.StatusCode != 206)
-                throw RangeProbe.Classify(response.StatusCode) is { } classified
-                    ? ApplyRetryAfter(classified, response.RetryAfterSeconds)
-                    : new DownloadTransportException($"意外的状态码 {response.StatusCode}。");
+                throw RangeProbe.Classify(response.StatusCode, response.RetryAfterSeconds);
             if (!RangeProbe.TryParseContentRange(response.ContentRange, out var contentStart, out _, out _)
                 || contentStart != requestStart)
                 throw new DownloadTransportException($"分段错位（期望从 {requestStart} 开始，服务器返回 {contentStart}）。");
@@ -347,6 +406,8 @@ public sealed class DownloadEngine
         if (winner != readTask)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // 被放弃的读稍后会随响应流释放以异常收场：挂接观察者，避免 UnobservedTaskException 噪声
+            _ = readTask.ContinueWith(static t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
             throw new DownloadTransportException($"分段超过 {_stallTimeout.TotalSeconds:0} 秒无数据，重试该分段。");
         }
         return await readTask.ConfigureAwait(false);
@@ -378,10 +439,6 @@ public sealed class DownloadEngine
         return segments;
     }
 
-    private static DownloadTransportException ApplyRetryAfter(DownloadTransportException error, int? retryAfterSeconds) =>
-        retryAfterSeconds is null ? error
-            : new DownloadTransportException(error.Message, error.StatusCode, error.Terminal, retryAfterSeconds);
-
     // ---------------------------------------------------------------- 单流路径
 
     /// <summary>单线程顺序下载：小文件、不支持 Range 或分段降级。单流不做续传（重跑即重来）。</summary>
@@ -395,14 +452,17 @@ public sealed class DownloadEngine
         var handle = File.OpenHandle(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, FileOptions.Asynchronous);
         try
         {
-            var response = await _transport.SendAsync(new TransportRequest(candidateUrl, null, null, null),
+            var response = await _transport.SendAsync(
+                new TransportRequest(candidateUrl, null, null, null, state.Options.EnforcePublicHttps),
                 cancellationToken).ConfigureAwait(false);
             long written = 0;
             await using (response.ConfigureAwait(false))
             {
                 if (response.StatusCode is not (200 or 206))
-                    throw RangeProbe.Classify(response.StatusCode);
-                if (response.ContentType.Contains("text/html", StringComparison.OrdinalIgnoreCase))
+                    throw RangeProbe.Classify(response.StatusCode, response.RetryAfterSeconds);
+                if (response.ContentType.Contains("text/html", StringComparison.OrdinalIgnoreCase)
+                    && !HasExplicitFileName(state.Options, probe)
+                    && RangeProbe.ParseContentDispositionFileName(response.ContentDisposition).Length == 0)
                     throw new DownloadTransportException("服务器返回网页而非文件，可能地址已失效、需要登录或被防盗链拦截。");
                 if (expectedTotal is null && response.ContentLength is { } inline) expectedTotal = inline;
                 if (expectedTotal is > 0)
@@ -483,23 +543,37 @@ public sealed class DownloadEngine
         var actual = await Sha256FileHasher.HashFileAsync(tempPath, cancellationToken).ConfigureAwait(false);
         if (!string.Equals(actual, expected.Trim(), StringComparison.OrdinalIgnoreCase))
             throw new DownloadTransportException(
-                $"文件校验不通过（sha256 不符，期望 {expected.Trim()}，实际 {actual}），已保留临时文件供排查。", terminal: true);
+                $"文件校验不通过（sha256 不符，期望 {expected.Trim()}，实际 {actual}）。已保留临时文件供排查；"
+                + "点击\"重试\"将自动改为全新下载。", terminal: true);
     }
 
-    /// <summary>提交：目标已存在时自动改为 "名称 (n).扩展" 而不是覆盖既有文件。</summary>
+    /// <summary>提交：目标已存在时自动改为 "名称 (n).扩展" 而不是覆盖既有文件。
+    /// 存在性检查与移动之间可能被并发任务抢占同名，Move 失败时取下一个 "(n)" 名重试。</summary>
     private static string MoveToFinal(string tempPath, string finalPath)
     {
         var directory = Path.GetDirectoryName(finalPath)!;
         Directory.CreateDirectory(directory);
-        var target = finalPath;
-        for (var n = 1; File.Exists(target); n++)
+        for (var n = 0; n < 128; n++)
         {
-            var name = Path.GetFileNameWithoutExtension(finalPath);
-            var extension = Path.GetExtension(finalPath);
-            target = Path.Combine(directory, $"{name} ({n}){extension}");
+            var target = n == 0 ? finalPath : NextCandidateName(finalPath, directory, n);
+            try
+            {
+                File.Move(tempPath, target);
+                return target;
+            }
+            catch (IOException) when (File.Exists(target))
+            {
+                // 并发抢占：取下一个 "(n)" 名重试
+            }
         }
-        File.Move(tempPath, target);
-        return target;
+        throw new IOException($"无法为目标文件找到可用名称：{finalPath}");
+    }
+
+    private static string NextCandidateName(string finalPath, string directory, int n)
+    {
+        var name = Path.GetFileNameWithoutExtension(finalPath);
+        var extension = Path.GetExtension(finalPath);
+        return Path.Combine(directory, $"{name} ({n}){extension}");
     }
 
     private static string ExpectedSha256Of(DownloadOptions options) => options.ExpectedSha256?.Trim() ?? "";
@@ -534,6 +608,7 @@ public sealed class DownloadEngine
         public DownloadOptions Options { get; }
         public int DefaultConnections { get; }
         public DownloadRateLimiter? TaskRateLimiter { get; }
+        public string? DecidedFileName; // 首个候选确定的落盘名，failover 后续候选复用
         public long Total;
         public long DoneRaw;
         public int ActiveSegmentsRaw;
@@ -556,8 +631,16 @@ public sealed class DownloadEngine
                 var sampleMilliseconds = now - _lastSpeedSampleMilliseconds;
                 if (sampleMilliseconds > 0)
                 {
-                    var instant = (done - _lastSpeedSampleBytes) * 1000.0 / sampleMilliseconds;
-                    _speed = _speed <= 0 ? instant : _speed * 0.7 + instant * 0.3;
+                    if (done < _lastSpeedSampleBytes)
+                    {
+                        // 进度回退（failover 重报 / 放弃续传清零）：重置速度基线，避免负瞬时速率污染 EMA
+                        _speed = 0;
+                    }
+                    else
+                    {
+                        var instant = (done - _lastSpeedSampleBytes) * 1000.0 / sampleMilliseconds;
+                        _speed = _speed <= 0 ? instant : _speed * 0.7 + instant * 0.3;
+                    }
                     _lastSpeedSampleMilliseconds = now;
                     _lastSpeedSampleBytes = done;
                 }

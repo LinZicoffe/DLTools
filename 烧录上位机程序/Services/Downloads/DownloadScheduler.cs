@@ -41,6 +41,8 @@ public sealed class DownloadScheduler
     private long _sequence;
     private int _running;
     private int _maxConcurrentTasks = 3;
+    private DownloadSettings _currentSettings = new();
+    private DownloadRateLimiter? _globalRateLimiter;
 
     /// <summary>任务状态/进度变化（含新增与移除后的列表变化用 TasksChanged）。</summary>
     public event Action<DownloadTask>? TaskChanged;
@@ -52,9 +54,24 @@ public sealed class DownloadScheduler
         _maxConcurrentTasks = Math.Clamp(maxConcurrentTasks, 1, 8);
     }
 
-    private DownloadEngine CreateDefaultEngine() => new(new DownloadHttpTransport(_currentSettings));
+    /// <summary>默认引擎工厂：新任务按当前设置建传输，并挂接全局限速器（UpdateSettings 后对新任务生效）。</summary>
+    private DownloadEngine CreateDefaultEngine()
+    {
+        DownloadSettings settings;
+        DownloadRateLimiter? limiter;
+        lock (_gate)
+        {
+            settings = _currentSettings;
+            limiter = _globalRateLimiter;
+        }
+        return new DownloadEngine(new DownloadHttpTransport(settings), limiter);
+    }
 
-    private DownloadSettings _currentSettings = new();
+    /// <summary>当前全局限速器（MaxRateKB&gt;0 时非空）；测试用于断言设置接线。</summary>
+    public DownloadRateLimiter? GlobalRateLimiter
+    {
+        get { lock (_gate) return _globalRateLimiter; }
+    }
 
     public int MaxConcurrentTasks
     {
@@ -84,11 +101,17 @@ public sealed class DownloadScheduler
         get { lock (_gate) return _tasks.Any(task => task.IsActive); }
     }
 
-    /// <summary>应用设置变更：并发槽位立即生效；代理/限速对后续新建的引擎生效（在途任务沿用旧配置）。</summary>
+    /// <summary>应用设置变更：并发槽位立即生效；代理/全局限速对之后启动的任务生效（在途任务沿用创建时的引擎配置）。</summary>
     public void UpdateSettings(DownloadSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        lock (_gate) _currentSettings = settings;
+        lock (_gate)
+        {
+            _currentSettings = settings;
+            _globalRateLimiter = settings.MaxRateKB > 0
+                ? new DownloadRateLimiter(settings.MaxRateKB * 1024)
+                : null; // 0 = 不限速
+        }
         MaxConcurrentTasks = settings.MaxConcurrentTasks;
     }
 
@@ -118,24 +141,29 @@ public sealed class DownloadScheduler
     public bool Pause(Guid id)
     {
         DownloadTask? task;
-        lock (_gate) task = _tasks.FirstOrDefault(item => item.Id == id);
-        if (task is null) return false;
-        lock (task)
+        lock (_gate)
         {
-            switch (task.State)
+            task = _tasks.FirstOrDefault(item => item.Id == id);
+            if (task is null) return false;
+            // 状态写入统一在 _gate + lock(task) 嵌套下完成，避免与泵（PumpLocked）的取任务竞争
+            lock (task)
             {
-                case DownloadTaskState.Queued:
-                    task.State = DownloadTaskState.Paused;
-                    task.Message = "已暂停，可继续（保留续传记录）";
-                    break;
-                case DownloadTaskState.Connecting or DownloadTaskState.Downloading
-                    or DownloadTaskState.Verifying or DownloadTaskState.Committing:
-                    task.PauseRequested = true;
-                    try { task.Cancellation?.Cancel(); }
-                    catch (ObjectDisposedException) { }
-                    return true; // 终态在引擎返回时落为 Paused
-                default:
-                    return false;
+                switch (task.State)
+                {
+                    case DownloadTaskState.Queued:
+                        task.State = DownloadTaskState.Paused;
+                        task.Message = "已暂停，可继续（保留续传记录）";
+                        break;
+                    case DownloadTaskState.Connecting or DownloadTaskState.Downloading
+                        or DownloadTaskState.Verifying or DownloadTaskState.Committing:
+                        task.PauseRequested = true;
+                        task.Message = "正在暂停，等待当前分段收尾…";
+                        try { task.Cancellation?.Cancel(); }
+                        catch (ObjectDisposedException) { }
+                        break; // 终态在引擎返回时落为 Paused
+                    default:
+                        return false;
+                }
             }
         }
         TaskChanged?.Invoke(task);
@@ -149,9 +177,15 @@ public sealed class DownloadScheduler
         lock (_gate)
         {
             task = _tasks.FirstOrDefault(item => item.Id == id);
-            if (task is null || task.State != DownloadTaskState.Paused) return false;
-            task.State = DownloadTaskState.Queued;
-            task.Message = "";
+            if (task is null) return false;
+            lock (task)
+            {
+                if (task.State != DownloadTaskState.Paused) return false;
+                // 此刻旧 RunAsync 至多还剩 finally（引擎已返回才会落 Paused）；CTS 归属检查保证新一轮的
+                // 取消能力不会被旧 finally 销毁，_running 增减自洽，无双引擎窗口
+                task.State = DownloadTaskState.Queued;
+                task.Message = "";
+            }
             started = PumpLocked();
         }
         TaskChanged?.Invoke(task);
@@ -162,31 +196,38 @@ public sealed class DownloadScheduler
     public bool Cancel(Guid id)
     {
         DownloadTask? task;
-        lock (_gate) task = _tasks.FirstOrDefault(item => item.Id == id);
-        if (task is null) return false;
-        lock (task)
+        bool immediate;
+        lock (_gate)
         {
-            switch (task.State)
+            task = _tasks.FirstOrDefault(item => item.Id == id);
+            if (task is null) return false;
+            immediate = false;
+            lock (task)
             {
-                case DownloadTaskState.Queued or DownloadTaskState.Paused:
-                    task.State = DownloadTaskState.Cancelled;
-                    task.Message = "已取消（保留续传记录）";
-                    break;
-                case DownloadTaskState.Connecting or DownloadTaskState.Downloading
-                    or DownloadTaskState.Verifying or DownloadTaskState.Committing:
-                    task.PauseRequested = false;
-                    try { task.Cancellation?.Cancel(); }
-                    catch (ObjectDisposedException) { }
-                    return true; // 终态在引擎返回时落为 Cancelled
-                default:
-                    return false;
+                switch (task.State)
+                {
+                    case DownloadTaskState.Queued or DownloadTaskState.Paused:
+                        task.State = DownloadTaskState.Cancelled;
+                        task.Message = "已取消（保留续传记录）";
+                        immediate = true;
+                        break;
+                    case DownloadTaskState.Connecting or DownloadTaskState.Downloading
+                        or DownloadTaskState.Verifying or DownloadTaskState.Committing:
+                        task.PauseRequested = false;
+                        try { task.Cancellation?.Cancel(); }
+                        catch (ObjectDisposedException) { }
+                        return true; // 终态在引擎返回时落为 Cancelled
+                    default:
+                        return false;
+                }
             }
         }
-        TaskChanged?.Invoke(task);
+        if (immediate) TaskChanged?.Invoke(task);
         return true;
     }
 
-    /// <summary>重试失败/已取消的任务；上次失败若因续传记录损坏，则改为全新下载。</summary>
+    /// <summary>重试失败/已取消的任务；上次失败若因续传记录损坏或终验不符（校验和/大小），
+    /// 既有临时数据已不可信，重试自动改为全新下载。</summary>
     public bool Retry(Guid id)
     {
         DownloadTask? task;
@@ -194,13 +235,21 @@ public sealed class DownloadScheduler
         lock (_gate)
         {
             task = _tasks.FirstOrDefault(item => item.Id == id);
-            if (task is null || task.State is not (DownloadTaskState.Failed or DownloadTaskState.Cancelled))
-                return false;
-            if (task.Error?.Contains("续传记录已损坏", StringComparison.Ordinal) == true)
-                task.ForceFreshOnRetry = true;
-            task.State = DownloadTaskState.Queued;
-            task.Error = null;
-            task.Message = "";
+            if (task is null) return false;
+            lock (task)
+            {
+                if (task.State is not (DownloadTaskState.Failed or DownloadTaskState.Cancelled)) return false;
+                if (task.Error is { } error
+                    && (error.Contains("续传记录已损坏", StringComparison.Ordinal)
+                        || error.Contains("校验不通过", StringComparison.Ordinal)
+                        || error.Contains("大小不符", StringComparison.Ordinal)))
+                {
+                    task.ForceFreshOnRetry = true;
+                }
+                task.State = DownloadTaskState.Queued;
+                task.Error = null;
+                task.Message = "";
+            }
             started = PumpLocked();
         }
         TaskChanged?.Invoke(task);
@@ -216,8 +265,11 @@ public sealed class DownloadScheduler
         {
             task = _tasks.FirstOrDefault(item => item.Id == id);
             if (task is null) return false;
-            if (task.IsActive && task.State != DownloadTaskState.Queued)
-                throw new InvalidOperationException("任务仍在运行，请先暂停或取消后再移除。");
+            lock (task)
+            {
+                if (task.IsActive && task.State != DownloadTaskState.Queued)
+                    throw new InvalidOperationException("任务仍在运行，请先暂停或取消后再移除。");
+            }
             _tasks.Remove(task);
         }
         TasksChanged?.Invoke();
@@ -232,17 +284,20 @@ public sealed class DownloadScheduler
         {
             foreach (var task in _tasks)
             {
-                if (task.State == DownloadTaskState.Queued)
+                lock (task)
                 {
-                    // 尚未启动的任务直接置为暂停：退出后不再有"活动"任务
-                    task.State = DownloadTaskState.Paused;
-                    task.Message = "已暂停，可继续（保留续传记录）";
-                    continue;
+                    if (task.State == DownloadTaskState.Queued)
+                    {
+                        // 尚未启动的任务直接置为暂停：退出后不再有"活动"任务
+                        task.State = DownloadTaskState.Paused;
+                        task.Message = "已暂停，可继续（保留续传记录）";
+                        continue;
+                    }
+                    if (task.State == DownloadTaskState.Paused) continue;
+                    task.PauseRequested = true;
+                    try { task.Cancellation?.Cancel(); }
+                    catch (ObjectDisposedException) { }
                 }
-                if (task.State == DownloadTaskState.Paused) continue;
-                task.PauseRequested = true;
-                try { task.Cancellation?.Cancel(); }
-                catch (ObjectDisposedException) { }
             }
             pending = _tasks.Where(task => task.RunTask is { IsCompleted: false })
                 .Select(task => task.RunTask!).ToArray();
@@ -263,18 +318,22 @@ public sealed class DownloadScheduler
                 .OrderBy(task => task.Sequence).FirstOrDefault();
             if (next is null) break;
             _running++;
-            next.State = DownloadTaskState.Connecting;
-            next.PauseRequested = false;
-            next.Cancellation = new CancellationTokenSource();
-            var token = next.Cancellation.Token;
-            next.RunTask = Task.Run(() => RunAsync(next, token));
+            lock (next) // 与 Pause/Cancel 同款嵌套锁序（_gate → task），状态翻转原子于泵
+            {
+                next.State = DownloadTaskState.Connecting;
+                next.PauseRequested = false;
+                next.Cancellation = new CancellationTokenSource();
+            }
+            var cts = next.Cancellation;
+            next.RunTask = Task.Run(() => RunAsync(next, cts));
             started.Add(next);
         }
         return started;
     }
 
-    private async Task RunAsync(DownloadTask task, CancellationToken token)
+    private async Task RunAsync(DownloadTask task, CancellationTokenSource ownedCts)
     {
+        var token = ownedCts.Token;
         DownloadOptions options = task.Options;
         if (task.ForceFreshOnRetry)
         {
@@ -330,8 +389,10 @@ public sealed class DownloadScheduler
             lock (_gate)
             {
                 _running--;
-                task.Cancellation?.Dispose();
-                task.Cancellation = null;
+                // 归属检查只守"不清空新一轮的取消能力"；旧 CTS 自身无条件释放
+                // （被覆盖说明新一轮已接管，旧 CTS 已无用；Pause/Cancel 侧另有 ObjectDisposedException 兜底）
+                if (ReferenceEquals(task.Cancellation, ownedCts)) task.Cancellation = null;
+                ownedCts.Dispose();
                 started = PumpLocked();
             }
             TaskChanged?.Invoke(task);
@@ -345,6 +406,9 @@ public sealed class DownloadScheduler
         {
             if (task.State is DownloadTaskState.Completed or DownloadTaskState.Failed
                 or DownloadTaskState.Cancelled or DownloadTaskState.Paused) return; // 抑制迟到进度
+            if (progress.State == DownloadTaskState.Completed) return;
+            // 引擎的"已完成"进度报告先于结果返回（此刻 FilePath 尚未落）：
+            // 终态由 RunAsync 统一写入（状态与文件名同拍），避免行先显示"已完成"却仍挂着 URL 名
             task.State = progress.State;
             task.TotalBytes = progress.TotalBytes;
             task.DownloadedBytes = progress.DownloadedBytes;

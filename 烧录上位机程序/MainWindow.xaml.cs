@@ -110,10 +110,17 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                 }
                 if (task is not null)
                 {
-                    if (waitingForFlashing)
-                        await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(15)));
-                    else
-                        await task; // 打包必须等进程退出、恢复目录完成，不得超时杀进程。
+                    try
+                    {
+                        if (waitingForFlashing)
+                            await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(15)));
+                        else
+                            await task; // 打包必须等进程退出、恢复目录完成，不得超时杀进程。
+                    }
+                    catch
+                    {
+                        // host 任务异常也代表已到终态；下载排空必须继续执行，不能被跳过
+                    }
                 }
                 if (downloadsBusy)
                     await scheduler.CancelAllAndDrainAsync(); // 下载引擎排空后日志已落盘，可安全退出

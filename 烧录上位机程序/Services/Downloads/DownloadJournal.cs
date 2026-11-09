@@ -70,6 +70,7 @@ public sealed class DownloadJournal
         var journalPath = JournalPathFor(finalPath);
         if (!File.Exists(journalPath)) return null;
         if (!File.Exists(TempPathFor(finalPath))) return null;
+        CleanupStaleTemps(journalPath);
         DownloadJournalDocument document;
         try
         {
@@ -83,7 +84,7 @@ public sealed class DownloadJournal
         catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
         {
             throw new IOException(
-                "续传记录已损坏（" + ex.Message + "），请在任务列表选择“删除续传记录”后重新下载（原记录已保留以便排查）："
+                "续传记录已损坏（" + ex.Message + "）。在任务上点击“重试”会自动改为全新下载；原记录已保留以便排查："
                 + journalPath, ex);
         }
 
@@ -97,6 +98,7 @@ public sealed class DownloadJournal
     public static DownloadJournal Create(string finalPath, string url, string etag, string lastModified,
         long totalLength, string fileName, string sha256, IReadOnlyList<DownloadSegment> segments)
     {
+        CleanupStaleTemps(JournalPathFor(finalPath));
         var journal = new DownloadJournal(finalPath, new DownloadJournalDocument
         {
             Url = url,
@@ -112,6 +114,22 @@ public sealed class DownloadJournal
         });
         lock (journal._gate) journal.Persist();
         return journal;
+    }
+
+    /// <summary>清理崩溃遗留的原子替换临时文件（&lt;日志路径&gt;.&lt;guid&gt;.tmp）。清理失败不影响主流程。</summary>
+    private static void CleanupStaleTemps(string journalPath)
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(journalPath);
+            if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory)) return;
+            foreach (var leftover in Directory.GetFiles(directory, Path.GetFileName(journalPath) + ".*.tmp"))
+            {
+                try { File.Delete(leftover); }
+                catch (IOException) { /* 被其他进程占用的遗留文件留给下次清理 */ }
+            }
+        }
+        catch (IOException) { /* 目录不可读等：不影响续传主流程 */ }
     }
 
     public IReadOnlyList<DownloadSegment> ReadSegments() =>

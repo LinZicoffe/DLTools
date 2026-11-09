@@ -106,7 +106,8 @@ public class MirrorManifestServiceTests
     {
         var service = new MirrorManifestService(new FakeDownloadTransport(async (request, _) =>
         {
-            if (request.Url.Contains("slow")) await Task.Delay(250);
+            // 1 秒分离度：CI 线程池饥饿时 fast 节点测量仍远小于 slow（250ms 曾有理论抖动）
+            if (request.Url.Contains("slow")) await Task.Delay(1000);
             if (request.Url.Contains("dead")) throw new DownloadTransportException("连接失败");
             return FakeDownloadTransport.Partial(10, 0, 0, [1]);
         }));
@@ -133,7 +134,55 @@ public class MirrorManifestServiceTests
         Assert.Equal("https://8.8.8.8/a/fw.bin", options.Url);
         Assert.Equal(["https://8.8.8.8/b/fw.bin"], options.MirrorUrls);
         Assert.Equal(ValidSha, options.ExpectedSha256); // 清单分发强制校验
+        Assert.True(options.EnforcePublicHttps); // 清单链路的请求（含重定向）保持 https 公网要求
         Assert.Equal(4, options.Connections);
         Assert.Equal(@"C:\out", options.DestinationDirectory);
+    }
+
+    [Fact]
+    public async Task Fetch_ManifestOver4MiB_IsRejected()
+    {
+        var oversized = new byte[4 * 1024 * 1024 + 1]; // 恰好超过上限
+        var service = new MirrorManifestService(new FakeDownloadTransport((_, _) =>
+            Task.FromResult(new TransportResponse(200, "application/json", "", "", null, oversized.Length,
+                "", null, new MemoryStream(oversized)))));
+
+        var error = await Assert.ThrowsAsync<DownloadTransportException>(
+            () => service.FetchAsync("https://8.8.8.8/manifest.json", CancellationToken.None));
+
+        Assert.Contains("4 MB 上限", error.Message);
+    }
+
+    [Fact]
+    public async Task OrderUrlsByLatency_AllNodesFail_ReturnsOriginalOrderForEngineErrors()
+    {
+        var service = new MirrorManifestService(new FakeDownloadTransport((_, _) =>
+            Task.FromResult(FakeDownloadTransport.Status(503))));
+        var entry = new MirrorFileEntry("fw.bin", 10, ValidSha,
+            ["https://8.8.8.8/a/fw.bin", "https://8.8.8.8/b/fw.bin", "https://8.8.8.8/c/fw.bin"]);
+
+        var ordered = await service.OrderUrlsByLatencyAsync(entry, CancellationToken.None);
+
+        // 全部失败时保持原序交回引擎：由引擎重试/failover 报出真实错误，而不是竞速层吞掉
+        Assert.Equal(entry.Urls, ordered);
+    }
+
+    [Fact]
+    public async Task OrderUrlsByLatency_HalfDeadNodeTimingOut_DoesNotBreakBatch()
+    {
+        // 半死节点：TCP 可连但 5 秒不回头。WaitAsync 超时抛 TimeoutException——
+        // 必须按"该节点失败"处理（沉底），不能让异常穿透打断整个"导入所选"批处理
+        var service = new MirrorManifestService(new FakeDownloadTransport(async (request, _) =>
+        {
+            if (request.Url.Contains("halfdead")) await Task.Delay(TimeSpan.FromSeconds(30));
+            return FakeDownloadTransport.Partial(10, 0, 0, [1]);
+        }), nodeProbeTimeout: TimeSpan.FromMilliseconds(200));
+        var entry = new MirrorFileEntry("fw.bin", 10, ValidSha,
+            ["https://8.8.8.8/halfdead/fw.bin", "https://8.8.8.8/alive/fw.bin"]);
+
+        var ordered = await service.OrderUrlsByLatencyAsync(entry, CancellationToken.None);
+
+        Assert.Equal("https://8.8.8.8/alive/fw.bin", ordered[0]);
+        Assert.Equal("https://8.8.8.8/halfdead/fw.bin", ordered[^1]); // 超时节点沉底而非中断
     }
 }

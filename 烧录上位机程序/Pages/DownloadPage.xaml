@@ -140,13 +140,16 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="默认连接数" VerticalAlignment="Center"/>
                         <TextBox Grid.Column="1" Text="{Binding DefaultConnections, UpdateSourceTrigger=PropertyChanged}"
-                                 Margin="8,0,0,0" MinHeight="32" VerticalContentAlignment="Center"/>
+                                 Margin="8,0,0,0" MinHeight="32" VerticalContentAlignment="Center"
+                                 AutomationProperties.Name="默认连接数"/>
                         <TextBlock Grid.Column="2" Text="同时下载任务数" VerticalAlignment="Center" Margin="16,0,0,0"/>
                         <TextBox Grid.Column="3" Text="{Binding MaxConcurrentTasks, UpdateSourceTrigger=PropertyChanged}"
-                                 Margin="8,0,0,0" MinHeight="32" VerticalContentAlignment="Center"/>
+                                 Margin="8,0,0,0" MinHeight="32" VerticalContentAlignment="Center"
+                                 AutomationProperties.Name="同时下载任务数"/>
                         <TextBlock Grid.Column="4" Text="全局限速(KB/s，0 不限)" VerticalAlignment="Center" Margin="16,0,0,0"/>
                         <TextBox Grid.Column="5" Text="{Binding MaxRateKB, UpdateSourceTrigger=PropertyChanged}"
-                                 Margin="8,0,0,0" MinHeight="32" VerticalContentAlignment="Center"/>
+                                 Margin="8,0,0,0" MinHeight="32" VerticalContentAlignment="Center"
+                                 AutomationProperties.Name="全局限速"/>
                     </Grid>
                     <Grid Margin="0,12,0,0">
                         <Grid.ColumnDefinitions>
@@ -159,10 +162,12 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="HTTP 代理主机" VerticalAlignment="Center"/>
                         <TextBox Grid.Column="1" Text="{Binding ProxyHost, UpdateSourceTrigger=PropertyChanged}"
-                                 Margin="8,0,0,0" MinHeight="32" VerticalContentAlignment="Center"/>
+                                 Margin="8,0,0,0" MinHeight="32" VerticalContentAlignment="Center"
+                                 AutomationProperties.Name="HTTP 代理主机"/>
                         <TextBlock Grid.Column="2" Text="端口" VerticalAlignment="Center" Margin="16,0,0,0"/>
                         <TextBox Grid.Column="3" Text="{Binding ProxyPort, UpdateSourceTrigger=PropertyChanged}"
-                                 Margin="8,0,0,0" MinHeight="32" VerticalContentAlignment="Center"/>
+                                 Margin="8,0,0,0" MinHeight="32" VerticalContentAlignment="Center"
+                                 AutomationProperties.Name="HTTP 代理端口"/>
                         <Button Grid.Column="4" Content="保存设置" Command="{Binding SaveSettingsCommand}"
                                 Margin="16,0,0,0" Style="{StaticResource SecondaryButtonStyle}"/>
                     </Grid>
@@ -188,7 +193,14 @@
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
-                    <DataGridTextColumn Header="状态" Binding="{Binding StateText, Mode=OneWay}" Width="70"/>
+                    <DataGridTextColumn Header="状态" Binding="{Binding StateText, Mode=OneWay}" Width="70">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                <Setter Property="ToolTip" Value="{Binding Message, Mode=OneWay}"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
                     <DataGridTemplateColumn Header="进度" Width="1.6*">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
@@ -207,7 +219,7 @@
                     </DataGridTemplateColumn>
                     <DataGridTextColumn Header="速度" Binding="{Binding SpeedText, Mode=OneWay}" Width="80"/>
                     <DataGridTextColumn Header="剩余时间" Binding="{Binding EtaText, Mode=OneWay}" Width="80"/>
-                    <DataGridTemplateColumn Header="操作" Width="290">
+                    <DataGridTemplateColumn Header="操作" Width="420">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">

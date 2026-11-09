@@ -19,11 +19,13 @@ public class DownloadEngineTests : IDisposable
         return data;
     }
 
-    /// <summary>在共享 FakeSegmentServer 语义之上记录分段区间与请求数。</summary>
+    /// <summary>在共享 FakeSegmentServer 语义之上记录分段区间与请求数；LastModified/ETag 可覆盖。</summary>
     private sealed class LoggedSegmentServer
     {
         public byte[] Data;
         public Func<TransportRequest, TransportResponse?>? Override;
+        public string ETag = "\"v1\"";
+        public string LastModified = "";
         public readonly List<(long Start, long End)> Ranges = [];
         public int Requests;
 
@@ -41,13 +43,14 @@ public class DownloadEngineTests : IDisposable
             {
                 var end = request.RangeEnd ?? Data.Length - 1;
                 if (start == 0 && end == 0) // 探测请求
-                    return FakeDownloadTransport.Partial(Data.Length, 0, 0, [Data[0]]);
+                    return FakeDownloadTransport.Partial(Data.Length, 0, 0, [Data[0]],
+                        etag: ETag, lastModified: LastModified);
                 lock (Ranges) Ranges.Add((start, end));
                 return FakeDownloadTransport.Partial(Data.Length, start, end,
-                    Data[(int)start..(int)(end + 1)]);
+                    Data[(int)start..(int)(end + 1)], etag: ETag, lastModified: LastModified);
             }
             lock (Ranges) Ranges.Add((0, Data.Length - 1));
-            return FakeDownloadTransport.OkFull(Data.Length, Data);
+            return FakeDownloadTransport.OkFull(Data.Length, Data, etag: ETag, lastModified: LastModified);
         }
 
         public IReadOnlyList<(long Start, long End)> SnapshotRanges()
@@ -201,19 +204,19 @@ public class DownloadEngineTests : IDisposable
         Directory.CreateDirectory(destination);
         var delays = new List<TimeSpan>();
 
+        // 连接数 1：单 worker 顺序尝试，退避次数确定（多 worker 时兄弟止损会提前截断在途退避）
         var result = await CreateEngine(transport, delays, maxAttempts: 2).DownloadAsync(new DownloadOptions
         {
             Url = "http://8.8.8.8/fw.bin",
             DestinationDirectory = destination,
-            Connections = 2,
+            Connections = 1,
             MirrorUrls = ["http://8.8.8.8/mirror/fw.bin"]
         }, _ => Task.CompletedTask, CancellationToken.None);
 
         Assert.True(result.Completed);
         Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
-        Assert.Equal(2, delays.Count); // 主节点两段各重试一次后放弃
-        Assert.All(delays, delay => Assert.True(delay >= TimeSpan.FromSeconds(1), $"Retry-After 应被尊重：{delay}"));
-        Assert.Equal(2, mirror.SnapshotRanges().Count); // 全部数据来自镜像
+        Assert.Equal([TimeSpan.FromSeconds(1)], delays); // 重试一次（尊重 Retry-After=1s）后放弃该节点
+        Assert.Single(mirror.SnapshotRanges()); // 全部数据来自镜像（连接数 1 → 单段）
     }
 
     [Fact]
@@ -352,6 +355,267 @@ public class DownloadEngineTests : IDisposable
         Assert.True(result.Resumed);
         Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
         Assert.All(resumeServer.SnapshotRanges(), range => Assert.True(range.Start >= 2 * 1024 * 1024));
+        // 续传请求必须携带 If-Range（探测 ETag "v1"）：资源变更时服务器回 200 触发重下而非拼接
+        Assert.All(resumeTransport.SnapshotRequests()
+            .Where(request => request.RangeStart is not null && request.RangeEnd != 0),
+            request => Assert.Equal("\"v1\"", request.IfRangeETag));
+    }
+
+    [Fact]
+    public async Task ProbeTransient503_RetriesThenSucceedsWithBackoff()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var probeFailures = 0;
+        var server = new LoggedSegmentServer(data)
+        {
+            Override = request => request.RangeStart is 0 && request.RangeEnd is 0
+                                  && Interlocked.Increment(ref probeFailures) == 1
+                ? FakeDownloadTransport.Status(503)
+                : null
+        };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+        var delays = new List<TimeSpan>();
+
+        var result = await CreateEngine(transport, delays).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed); // 探测级瞬时失败不再让任务整体失败/立刻换节点
+        Assert.Equal(2, probeFailures); // 探测执行两次：一次 503 + 一次成功
+        Assert.Equal([TimeSpan.FromMilliseconds(500)], delays);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+    }
+
+    [Fact]
+    public async Task Probe429_HonoursRetryAfterHeader()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var probeFailures = 0;
+        var server = new LoggedSegmentServer(data)
+        {
+            Override = request => request.RangeStart is 0 && request.RangeEnd is 0
+                                  && Interlocked.Increment(ref probeFailures) == 1
+                ? FakeDownloadTransport.RateLimited(2)
+                : null
+        };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+        var delays = new List<TimeSpan>();
+
+        var result = await CreateEngine(transport, delays).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.Equal([TimeSpan.FromSeconds(2)], delays); // Retry-After 优先于 500ms 指数退避
+    }
+
+    [Fact]
+    public async Task RepeatedTruncationWithProgress_ResetsAttemptBudgetAndCompletes()
+    {
+        // 模拟代理按固定字节掐断：每次只给 200KiB 就 EOF。健康推进的下载不应被 5 次上限误杀
+        var data = TestData((int)(2.5 * 1024 * 1024)); // 连接数 1 → 单段
+        const int chunk = 200 * 1024; // 2.5MiB / 200KiB ≈ 13 次响应（12 次"提前结束"）
+        var server = new LoggedSegmentServer(data)
+        {
+            Override = request => request.RangeStart is { } start && request.RangeEnd != 0
+                ? FakeDownloadTransport.Partial(data.Length, start, request.RangeEnd!.Value,
+                    data[(int)start..(int)(start + Math.Min(chunk, request.RangeEnd.Value - start + 1))])
+                : null
+        };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+        var delays = new List<TimeSpan>();
+
+        var result = await CreateEngine(transport, delays).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 1
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.True(delays.Count >= 10, $"应有多次截断重试，实际 {delays.Count} 次");
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+    }
+
+    [Fact]
+    public async Task SegmentContentRangeMisaligned_FailsWithOffsetHint()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var server = new LoggedSegmentServer(data)
+        {
+            Override = request => request.RangeStart is 0 && request.RangeEnd != 0
+                ? FakeDownloadTransport.Partial(data.Length, 5, request.RangeEnd!.Value,
+                    data[5..(int)(request.RangeEnd.Value + 1)]) // 从 5 开始，而请求要 0
+                : null
+        };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        var result = await CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 1
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.False(result.Completed);
+        Assert.Contains("分段错位", result.Error);
+    }
+
+    [Fact]
+    public async Task LastModifiedOnlyResume_UnchangedServer_ResumesSkippedSegments()
+    {
+        const string lastModified = "Wed, 01 Jan 2025 00:00:00 GMT";
+        var data = TestData(3 * 1024 * 1024); // 2 段
+        var firstRun = true;
+        var blockingServer = new LoggedSegmentServer(data)
+        {
+            ETag = "", LastModified = lastModified,
+            Override = request => request.RangeStart is 0 && request.RangeEnd is 0
+                ? null
+                : request.RangeStart >= 2 * 1024 * 1024 && firstRun
+                    ? new TransportResponse(206, "application/octet-stream", "", "",
+                        $"bytes {request.RangeStart}-{request.RangeEnd}/{data.Length}", null, "", null,
+                        new BlockingStream())
+                    : null
+        };
+        var transport = new FakeDownloadTransport((request, _) =>
+            Task.FromResult(blockingServer.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        using var cancellation = new CancellationTokenSource();
+        var download = CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2
+        }, update =>
+        {
+            if (update.DownloadedBytes >= 2 * 1024 * 1024) cancellation.Cancel();
+            return Task.CompletedTask;
+        }, cancellation.Token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download);
+
+        firstRun = false;
+        var resumeServer = new LoggedSegmentServer(data) { ETag = "", LastModified = lastModified };
+        var resumeTransport = new FakeDownloadTransport((request, _) =>
+            Task.FromResult(resumeServer.Serve(request)));
+        var result = await CreateEngine(resumeTransport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.True(result.Resumed); // 无 ETag 时 Last-Modified 一致同样允许续传
+        Assert.All(resumeServer.SnapshotRanges(), range => Assert.True(range.Start >= 2 * 1024 * 1024));
+        // 无 ETag 时 If-Range 退回 Last-Modified 日期条件
+        Assert.All(resumeTransport.SnapshotRequests()
+            .Where(request => request.RangeStart is not null && request.RangeEnd != 0),
+            request => Assert.Equal(lastModified, request.IfRangeETag));
+    }
+
+    [Fact]
+    public async Task LastModifiedOnlyResume_ChangedServer_RestartsFromZero()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var finalPath = Path.Combine(_workspace.Root, "out", "fw.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
+        // 预置"已下载半段"记录：无 ETag、Last-Modified 旧值
+        DownloadJournal.Create(finalPath, "http://8.8.8.8/fw.bin", "", "Wed, 01 Jan 2025 00:00:00 GMT",
+            data.Length, "fw.bin", "",
+            [new DownloadSegment(0, 2 * 1024 * 1024 - 1, 1024 * 1024),
+             new DownloadSegment(2 * 1024 * 1024, data.Length - 1, 0)]);
+        File.WriteAllText(DownloadJournal.TempPathFor(finalPath), new string('x', data.Length));
+
+        var server = new LoggedSegmentServer(data)
+        {
+            ETag = "", LastModified = "Thu, 01 Jan 2026 00:00:00 GMT" // 服务器资源已变更
+        };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+
+        var result = await CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = Path.GetDirectoryName(finalPath)!, Connections = 2
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.False(result.Resumed); // Last-Modified 不一致 → 放弃续传
+        Assert.Contains(server.SnapshotRanges(), range => range.Start == 0);
+    }
+
+    [Fact]
+    public async Task HtmlResponseWithDispositionFileName_DownloadsFile()
+    {
+        var html = "<html>release notes</html>"u8.ToArray();
+        var transport = new FakeDownloadTransport((_, _) => Task.FromResult(
+            FakeDownloadTransport.OkFull(html.Length, html, contentType: "text/html",
+                disposition: "attachment; filename=\"notes.html\"")));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        var result = await CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/notes", DestinationDirectory = destination
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed); // 显式命名的 html 不是防盗链页，允许下载
+        Assert.Equal("notes.html", Path.GetFileName(result.FilePath!));
+        Assert.Equal(html, await File.ReadAllBytesAsync(result.FilePath!));
+    }
+
+    [Fact]
+    public async Task MirrorFailover_KeepsFirstCandidateFileName()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var primary = new LoggedSegmentServer(data)
+        {
+            Override = request => request.RangeStart is 0 && request.RangeEnd is 0
+                ? FakeDownloadTransport.Partial(data.Length, 0, 0, [data[0]],
+                    disposition: "attachment; filename=\"primary.bin\"")
+                : FakeDownloadTransport.Status(404) // 探测可用但分段终态 404 → failover
+        };
+        var mirror = new LoggedSegmentServer(data);
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(
+            request.Url.Contains("mirror") ? mirror.Serve(request) : primary.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        var result = await CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin",
+            DestinationDirectory = destination,
+            Connections = 2,
+            MirrorUrls = ["http://8.8.8.8/mirror/fw.bin"]
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed);
+        // 落盘名沿用首个候选（续传记录/目标路径跨镜像一致），而非镜像返回的 URL 名
+        Assert.Equal("primary.bin", Path.GetFileName(result.FilePath!));
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+    }
+
+    [Fact]
+    public async Task SingleStreamUnknownLength_CompletesWithActualSize()
+    {
+        var data = TestData(600 * 1024); // 无 Content-Length 的 200 响应 → 单流未知总长
+        var transport = new FakeDownloadTransport((_, _) => Task.FromResult(
+            new TransportResponse(200, "application/octet-stream", "\"v1\"", "", null, null, "", null,
+                new MemoryStream(data))));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        var result = await CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.Equal(data.Length, result.TotalBytes);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
     }
 
     [Fact]

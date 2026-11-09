@@ -25,6 +25,9 @@ public sealed record DownloadOptions
     public bool StartPaused { get; init; }
     /// <summary>镜像清单层填充的备用候选地址；引擎按 Url → MirrorUrls 顺序降级。</summary>
     public IReadOnlyList<string> MirrorUrls { get; init; } = [];
+    /// <summary>镜像清单链路：所有请求（含重定向的每一跳）强制 https 公网地址（DownloadUrlGuard.EnsureManifestUrl）。
+    /// 普通直链下载为 false，仅校验 http/https 与拒绝内嵌账号（用户可下载局域网资源）。</summary>
+    public bool EnforcePublicHttps { get; init; }
     /// <summary>同一 Url+目标路径下的 .dltmp/.dltask.json 续传记录存在时自动续传。</summary>
     public bool AllowResume { get; init; } = true;
 }

@@ -21,18 +21,22 @@ public sealed class MirrorManifestService
 
     private readonly IDownloadTransport _transport;
     private readonly Func<long> _clock;
+    private readonly TimeSpan _nodeProbeTimeout;
 
-    public MirrorManifestService(IDownloadTransport? transport = null, Func<long>? clock = null)
+    public MirrorManifestService(IDownloadTransport? transport = null, Func<long>? clock = null,
+        TimeSpan? nodeProbeTimeout = null)
     {
         _transport = transport ?? new DownloadHttpTransport();
         _clock = clock ?? Stopwatch.GetTimestampMilliseconds;
+        _nodeProbeTimeout = nodeProbeTimeout ?? NodeProbeTimeout;
     }
 
     public async Task<MirrorManifest> FetchAsync(string manifestUrl, CancellationToken cancellationToken)
     {
-        DownloadUrlGuard.EnsureManifestUrl(manifestUrl); // https + 非 localhost/环回/私网/保留地址
+        DownloadUrlGuard.EnsureManifestUrl(manifestUrl); // https + 非 localhost/环回/私网/保留地址（重定向逐跳复检）
         await using var response = await _transport.SendAsync(
-            new TransportRequest(manifestUrl.Trim(), null, null, null), cancellationToken).ConfigureAwait(false);
+            new TransportRequest(manifestUrl.Trim(), null, null, null, EnforcePublicHttps: true),
+            cancellationToken).ConfigureAwait(false);
         if (response.StatusCode is < 200 or > 299)
             throw new DownloadTransportException($"清单下载失败（HTTP {response.StatusCode}），请稍后重试或更换清单地址。",
                 response.StatusCode, terminal: response.StatusCode is 403 or 404 or 410);
@@ -109,7 +113,8 @@ public sealed class MirrorManifestService
             Connections = connections,
             MaxRateKBps = maxRateKBps,
             ExpectedSha256 = entry.Sha256, // 清单分发强制校验
-            StartPaused = startPaused
+            StartPaused = startPaused,
+            EnforcePublicHttps = true // 清单链路的全部请求（含重定向）保持 https 公网要求
         };
 
     private async Task<NodeMeasurement> MeasureAsync(string url, CancellationToken cancellationToken)
@@ -117,13 +122,19 @@ public sealed class MirrorManifestService
         var started = _clock();
         try
         {
-            await using var response = await _transport.SendAsync(new TransportRequest(url, 0, 0, null), cancellationToken)
-                .WaitAsync(NodeProbeTimeout, cancellationToken).ConfigureAwait(false);
+            await using var response = await _transport.SendAsync(
+                    new TransportRequest(url, 0, 0, null, EnforcePublicHttps: true), cancellationToken)
+                .WaitAsync(_nodeProbeTimeout, cancellationToken).ConfigureAwait(false);
             if (response.StatusCode is < 200 or > 299) return new(url, null);
             var elapsed = _clock() - started;
             return new(url, elapsed);
         }
-        catch (Exception error) when (error is OperationCanceledException or DownloadTransportException)
+        // WaitAsync 超时抛 TimeoutException（半死节点：TCP 可连但 5 秒不回头）——同样视为该节点失败，
+        // 不能让单个节点的超时把整个"导入所选"批处理打断。
+        // 注：OCE 在此按"该节点失败"优雅降级（沉底）；当前调用方传 CancellationToken.None，
+        // 若未来引入真实取消令牌需先让 OCE 上抛而非吞掉。
+        catch (Exception error) when (error is OperationCanceledException or DownloadTransportException
+            or TimeoutException)
         {
             return new(url, null);
         }

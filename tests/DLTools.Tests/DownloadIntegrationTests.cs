@@ -39,7 +39,7 @@ public class DownloadIntegrationTests : IDisposable
 
     private sealed class RangeServer : IDisposable
     {
-        private readonly HttpListener _listener = new();
+        private HttpListener _listener = new(); // 端口被占时重建重试，不能 readonly
         private readonly CancellationTokenSource _stop = new();
         private readonly Task _loop;
         private readonly object _gate = new();
@@ -55,9 +55,23 @@ public class DownloadIntegrationTests : IDisposable
         public RangeServer(byte[] data)
         {
             Data = data;
-            var port = RandomNumberGenerator.GetInt32(20000, 40000);
-            _listener.Prefixes.Add($"http://localhost:{port}/");
-            _listener.Start();
+            // 端口偶发占用时重抽（最多 3 次），避免集成测试因端口冲突闪挂
+            int port;
+            for (var attempt = 0; ; attempt++)
+            {
+                port = RandomNumberGenerator.GetInt32(20000, 40000);
+                _listener.Prefixes.Add($"http://localhost:{port}/");
+                try
+                {
+                    _listener.Start();
+                    break;
+                }
+                catch (HttpListenerException) when (attempt < 2)
+                {
+                    _listener.Close();
+                    _listener = new HttpListener();
+                }
+            }
             BaseUrl = $"http://localhost:{port}";
             _loop = Task.Run(async () =>
             {

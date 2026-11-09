@@ -28,7 +28,7 @@ public class DownloadSchedulerTests : IDisposable
     /// <summary>可整体闸住的传输：probe（RangeEnd=0）放行，真正分段/全量请求等待闸门。</summary>
     private sealed class GatedTransport
     {
-        private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously); // Reset 需重建
         public readonly List<string> StartedUrls = [];
         public FakeSegmentServer Server;
 
@@ -44,6 +44,9 @@ public class DownloadSchedulerTests : IDisposable
         });
 
         public void Release() => _gate.TrySetResult();
+
+        /// <summary>复位闸门（收尾断言需要再次闸住新任务）。</summary>
+        public void Reset() => _gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public IReadOnlyList<string> SnapshotStarted()
         {
@@ -258,6 +261,222 @@ public class DownloadSchedulerTests : IDisposable
         await WaitUntilAsync(() => gated.SnapshotStarted().Count == 2, "提升并发后第二个任务应启动");
         gated.Release();
         await WaitUntilAsync(() => scheduler.Tasks.All(task => task.State == DownloadTaskState.Completed), "全部完成");
+    }
+
+    [Fact]
+    public async Task UpdateSettings_LoweringMaxConcurrent_BlocksNewStartsUntilSlotFrees()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var gated = new GatedTransport(new FakeSegmentServer(data));
+        var scheduler = CreateScheduler(gated.Build(), maxConcurrent: 2);
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        scheduler.Enqueue(Options("http://8.8.8.8/a.bin", destination));
+        scheduler.Enqueue(Options("http://8.8.8.8/b.bin", destination));
+        await WaitUntilAsync(() => gated.SnapshotStarted().Count == 2, "两个任务占满 2 槽");
+
+        scheduler.UpdateSettings(new DownloadSettings { MaxConcurrentTasks = 1 });
+        var third = scheduler.Enqueue(Options("http://8.8.8.8/c.bin", destination));
+        await Task.Delay(150);
+        Assert.Equal(DownloadTaskState.Queued, third.State); // 调小并发后新任务不再启动
+
+        gated.Release();
+        await WaitUntilAsync(() => third.State == DownloadTaskState.Completed, "槽位释放后第三个任务启动并完成");
+        await WaitUntilAsync(() => scheduler.Tasks.All(task => task.State == DownloadTaskState.Completed), "全部完成");
+    }
+
+    [Fact]
+    public void UpdateSettings_WiresGlobalRateLimiterForNewTasks()
+    {
+        var scheduler = new DownloadScheduler(); // 默认引擎工厂（不真正建任务，不触网）
+
+        scheduler.UpdateSettings(new DownloadSettings { MaxRateKB = 64 });
+        Assert.NotNull(scheduler.GlobalRateLimiter); // 全局限速不再是死配置
+
+        scheduler.UpdateSettings(new DownloadSettings { MaxRateKB = 0 });
+        Assert.Null(scheduler.GlobalRateLimiter); // 0 = 不限速
+    }
+
+    [Fact]
+    public async Task EnqueueStartPaused_DoesNotCreateEngineAndStaysPaused()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var gated = new GatedTransport(new FakeSegmentServer(data));
+        var engines = 0;
+        var scheduler = CreateScheduler(gated.Build(), maxConcurrent: 2, onEngineCreated: () => Interlocked.Increment(ref engines));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        var task = scheduler.Enqueue(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/a.bin", DestinationDirectory = destination, StartPaused = true
+        });
+        await Task.Delay(150);
+        Assert.Equal(DownloadTaskState.Paused, task.State);
+        Assert.Equal(0, engines); // 暂停入队不占槽、不建引擎
+    }
+
+    [Fact]
+    public async Task Remove_QueuedTask_RemovesWithoutStartingEngine()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var gated = new GatedTransport(new FakeSegmentServer(data));
+        var engines = 0;
+        var scheduler = CreateScheduler(gated.Build(), maxConcurrent: 1,
+            onEngineCreated: () => Interlocked.Increment(ref engines));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        scheduler.Enqueue(Options("http://8.8.8.8/a.bin", destination));
+        var queued = scheduler.Enqueue(Options("http://8.8.8.8/b.bin", destination));
+        await WaitUntilAsync(() => engines == 1, "首个任务启动");
+        Assert.Equal(DownloadTaskState.Queued, queued.State);
+
+        Assert.True(scheduler.Remove(queued.Id));
+        Assert.DoesNotContain(queued, scheduler.Tasks);
+        gated.Release();
+        await WaitUntilAsync(() => scheduler.Tasks.All(task => task.State == DownloadTaskState.Completed), "首个任务完成");
+        Assert.Equal(1, engines); // 被移除的排队任务从未启动
+    }
+
+    [Fact]
+    public async Task Pause_RunningTask_ShowsPausingFeedbackThenLandsPaused()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var gated = new GatedTransport(new FakeSegmentServer(data));
+        var scheduler = CreateScheduler(gated.Build(), maxConcurrent: 1);
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        var task = scheduler.Enqueue(Options("http://8.8.8.8/a.bin", destination));
+        // 闸住时段无数据回流，状态停在 Connecting（首个数据报文后才转 Downloading）
+        await WaitUntilAsync(() => task.State is DownloadTaskState.Connecting or DownloadTaskState.Downloading,
+            "任务进入运行态");
+
+        Assert.True(scheduler.Pause(task.Id));
+        Assert.Contains("正在暂停", task.Message); // 立即反馈，而非静默等待引擎返回
+
+        gated.Release();
+        await WaitUntilAsync(() => task.State == DownloadTaskState.Paused, "引擎返回后落 Paused");
+    }
+
+    [Fact]
+    public async Task RetryAfterSha256Mismatch_DownloadsFreshInsteadOfReverifyingSameTemp()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var transport = new FakeDownloadTransport((request, _) =>
+            Task.FromResult(new FakeSegmentServer(data).Serve(request)));
+        var scheduler = CreateScheduler(transport, maxConcurrent: 1);
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        int BodyRangeRequests() => transport.SnapshotRequests()
+            .Count(request => request.RangeStart is not null && request.RangeEnd != 0);
+
+        var task = scheduler.Enqueue(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/a.bin", DestinationDirectory = destination,
+            ExpectedSha256 = new string('f', 64) // 永不匹配
+        });
+        await WaitUntilAsync(() => task.State == DownloadTaskState.Failed, "首次下载校验失败");
+        Assert.Contains("校验不通过", task.Error);
+        var firstRunRequests = BodyRangeRequests();
+        Assert.True(firstRunRequests > 0);
+
+        Assert.True(scheduler.Retry(task.Id));
+        await WaitUntilAsync(() => task.State == DownloadTaskState.Failed, "重试仍应校验失败");
+        Assert.True(BodyRangeRequests() > firstRunRequests, // 全新重下，而不是复验同一份坏数据
+            $"重试后应重新拉取分段：{BodyRangeRequests()} <= {firstRunRequests}");
+    }
+
+    /// <summary>并发操作同一任务时的双引擎/状态错乱检测器：同一 URL 的在途请求超过 1 即记违规。</summary>
+    private sealed class ConcurrencyGuardTransport : IDownloadTransport
+    {
+        private readonly FakeDownloadTransport _inner;
+        private readonly object _gate = new();
+        private readonly Dictionary<string, int> _inflight = [];
+        public readonly List<string> Violations = [];
+
+        public ConcurrencyGuardTransport(FakeDownloadTransport inner) => _inner = inner;
+
+        public async Task<TransportResponse> SendAsync(TransportRequest request, CancellationToken cancellationToken)
+        {
+            lock (_gate)
+            {
+                _inflight[request.Url] = _inflight.GetValueOrDefault(request.Url) + 1;
+                if (_inflight[request.Url] > 1)
+                    Violations.Add($"并发引擎同时请求 {request.Url}");
+            }
+            try { return await _inner.SendAsync(request, cancellationToken); }
+            finally
+            {
+                lock (_gate) _inflight[request.Url]--;
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentPauseResumeCancel_NeverRunsTwoEnginesForSameTask()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var gated = new GatedTransport(new FakeSegmentServer(data));
+        var guard = new ConcurrencyGuardTransport(gated.Build());
+        var scheduler = new DownloadScheduler(() =>
+            new DownloadEngine(guard, retryDelay: (_, _) => Task.CompletedTask), 2);
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        var first = scheduler.Enqueue(Options("http://8.8.8.8/a.bin", destination));
+        var second = scheduler.Enqueue(Options("http://8.8.8.8/b.bin", destination));
+        await WaitUntilAsync(() => gated.SnapshotStarted().Count == 2, "两任务同时下载（闸住）");
+
+        // 确定性操作序列（取模轮转，非随机）：两个线程对两任务交替暂停/继续/取消/重试
+        var churn = Task.Run(() =>
+        {
+            for (var i = 0; i < 300; i++)
+            {
+                var task = i % 2 == 0 ? first : second;
+                switch (i % 4)
+                {
+                    case 0: scheduler.Pause(task.Id); break;
+                    case 1: scheduler.Resume(task.Id); break;
+                    case 2: scheduler.Cancel(task.Id); break;
+                    default: scheduler.Retry(task.Id); break;
+                }
+            }
+        });
+        var churn2 = Task.Run(() =>
+        {
+            for (var i = 0; i < 300; i++)
+            {
+                var task = i % 2 == 0 ? second : first;
+                scheduler.Pause(task.Id);
+                scheduler.Resume(task.Id);
+            }
+        });
+        await Task.WhenAll(churn, churn2);
+        gated.Release();
+        await scheduler.CancelAllAndDrainAsync();
+
+        Assert.Empty(guard.Violations); // 任意时刻同一任务至多一个引擎在跑
+        Assert.All(scheduler.Tasks, task =>
+            Assert.True(task.State is DownloadTaskState.Completed or DownloadTaskState.Paused
+                or DownloadTaskState.Failed or DownloadTaskState.Cancelled,
+                $"终态非法：{task.State}"));
+        Assert.All(scheduler.Tasks, task =>
+            Assert.True(task.Error is null || (!task.Error.Contains("另一个进程") && !task.Error.Contains("ObjectDisposed")),
+                $"并发操作产生坏状态：{task.Error}"));
+
+        // 槽位核算自洽：排空后再入队两个任务必须都能启动（若 _running 被搅动搞坏，新任务会滞留 Queued）
+        gated.Reset();
+        var lateA = scheduler.Enqueue(Options("http://8.8.8.8/late-a.bin", destination));
+        var lateB = scheduler.Enqueue(Options("http://8.8.8.8/late-b.bin", destination));
+        await WaitUntilAsync(() => gated.SnapshotStarted().Any(url => url.Contains("late-a"))
+            && gated.SnapshotStarted().Any(url => url.Contains("late-b")), "排空后槽位应全部可用");
+        gated.Release();
+        await WaitUntilAsync(() => lateA.State == DownloadTaskState.Completed
+            && lateB.State == DownloadTaskState.Completed, "收尾任务完成");
     }
 
     public void Dispose() => _workspace.Dispose();

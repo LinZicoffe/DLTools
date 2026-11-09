@@ -117,7 +117,13 @@ public partial class DownloadTaskViewModel : ObservableObject
     private bool CanRetry() => State is DownloadTaskState.Failed or DownloadTaskState.Cancelled;
 
     [RelayCommand(CanExecute = nameof(CanRemove))]
-    private void Remove() => _scheduler.Remove(Id); // 列表行由 TasksChanged 事件移除
+    private void Remove()
+    {
+        // 行状态经 Dispatcher 投递可能滞后（暂停→继续的瞬间按钮仍可点）：调度器拒删时
+        // 只刷新本行状态让按钮重新评估，不让异常穿透到全局错误弹窗
+        try { _scheduler.Remove(Id); } // 列表行由 TasksChanged 事件移除
+        catch (InvalidOperationException) { RefreshFromTask(); }
+    }
     private bool CanRemove() => !IsRunning;
 
     [RelayCommand(CanExecute = nameof(CanOpen))]
