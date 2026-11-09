@@ -10,6 +10,7 @@ public partial class MainWindowViewModel : ObservableObject
     private readonly PackagingPage _packagingPage = new();
     private readonly OfflineAuthorizationPage _authorizationPage = new();
     private readonly IpScanPage _ipScanPage = new();
+    private readonly DownloadPage _downloadPage = new();
 
     public MainWindowViewModel() => CurrentPage = _flashPage;
 
@@ -18,6 +19,7 @@ public partial class MainWindowViewModel : ObservableObject
     public bool IsPackagingSelected => ReferenceEquals(CurrentPage, _packagingPage);
     public bool IsAuthorizationSelected => ReferenceEquals(CurrentPage, _authorizationPage);
     public bool IsIpScanSelected => ReferenceEquals(CurrentPage, _ipScanPage);
+    public bool IsDownloadSelected => ReferenceEquals(CurrentPage, _downloadPage);
 
     partial void OnCurrentPageChanged(BasePage? value)
     {
@@ -25,10 +27,12 @@ public partial class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(IsPackagingSelected));
         OnPropertyChanged(nameof(IsAuthorizationSelected));
         OnPropertyChanged(nameof(IsIpScanSelected));
+        OnPropertyChanged(nameof(IsDownloadSelected));
     }
 
     [RelayCommand] private void ShowFlash() => CurrentPage = _flashPage;
     [RelayCommand] private void ShowPackaging() => CurrentPage = _packagingPage;
     [RelayCommand] private void ShowAuthorization() => CurrentPage = _authorizationPage;
     [RelayCommand] private void ShowIpScan() => CurrentPage = _ipScanPage;
+    [RelayCommand] private void ShowDownload() => CurrentPage = _downloadPage;
 }
