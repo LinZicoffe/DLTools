@@ -5,7 +5,8 @@ public enum BackgroundOperationKind
     Flashing,
     Packaging,
     Authorization,
-    IpScanning
+    IpScanning,
+    DiskCleanup
 }
 
 /// <summary>Application-wide exclusive ownership, held until the actual operation task terminates.</summary>

@@ -1,0 +1,128 @@
+<local:BasePage x:Class="烧录上位机程序.Pages.CleanupPage"
+                Title="C盘清理"
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:local="clr-namespace:烧录上位机程序.Pages">
+    <Grid Background="{StaticResource PageBgBrush}" Margin="22,18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 页头 -->
+        <StackPanel Margin="0,0,0,18">
+            <TextBlock Text="C盘清理" FontSize="24" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}"/>
+            <TextBlock Text="按类别安全清理可再生缓存与 AI 工具产物；对话数据库、模型与记忆文件只展示或永不触碰，每个文件删除前都会重新校验。"
+                       Margin="0,6,0,0" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+        </StackPanel>
+
+        <!-- 操作区 -->
+        <Border Grid.Row="1" Background="White" BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="1"
+                CornerRadius="8" Padding="18" Margin="0,0,0,16">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="扫描预览" Command="{Binding ScanCommand}" MinWidth="110"
+                            Style="{StaticResource PrimaryButtonStyle}" AutomationProperties.Name="扫描预览"/>
+                    <Button Content="取消" Command="{Binding CancelCommand}" Margin="10,0,0,0" MinWidth="80"
+                            Style="{StaticResource SecondaryButtonStyle}" AutomationProperties.Name="取消扫描或清理"/>
+                    <Button Content="清理选中项" Command="{Binding CleanCommand}" Margin="10,0,0,0" MinWidth="110"
+                            Style="{StaticResource SecondaryButtonStyle}" AutomationProperties.Name="清理选中类别"/>
+                    <Button Content="复制审计路径" Command="{Binding CopyAuditPathCommand}" Margin="10,0,0,0" MinWidth="100"
+                            Style="{StaticResource SecondaryButtonStyle}" AutomationProperties.Name="复制审计日志路径"/>
+                </StackPanel>
+                <TextBlock Text="{Binding SelectedSummaryText, Mode=OneWay}" Margin="0,10,0,0"
+                           Foreground="{StaticResource TextPrimaryBrush}" FontWeight="SemiBold"
+                           AutomationProperties.LiveSetting="Polite"/>
+                <Grid Margin="0,10,0,0">
+                    <TextBlock Text="{Binding ProgressText}" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBlock Text="{Binding ProgressPercent, Mode=OneWay, StringFormat={}{0}%}"
+                               HorizontalAlignment="Right" Foreground="{StaticResource TextSecondaryBrush}"/>
+                </Grid>
+                <ProgressBar Value="{Binding ProgressPercent, Mode=OneWay}" Maximum="100" Height="8" Margin="0,6,0,0"
+                             Style="{StaticResource RoundedProgressStyle}" AutomationProperties.Name="清理进度"/>
+                <TextBlock Text="{Binding Status}" Margin="0,10,0,0" TextWrapping="Wrap"
+                           Foreground="{StaticResource TextPrimaryBrush}" AutomationProperties.LiveSetting="Polite"/>
+                <TextBlock Text="悬停每一行可查看「这是什么 / 删了会发生什么」。仅展示的类别不可勾选；清理前会再次确认。"
+                           Margin="0,6,0,0" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+            </StackPanel>
+        </Border>
+
+        <!-- 通用缓存 -->
+        <GroupBox Grid.Row="2" Header="通用缓存" Margin="0,0,0,12">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding GeneralRules}" AutomationProperties.Name="通用缓存类别列表">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Padding="4,7" BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="0,0,0,1">
+                                <Border.ToolTip>
+                                    <StackPanel MaxWidth="420">
+                                        <TextBlock Text="{Binding Description}" TextWrapping="Wrap" FontWeight="SemiBold"/>
+                                        <TextBlock Text="{Binding ConsequenceNote}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                    </StackPanel>
+                                </Border.ToolTip>
+                                <DockPanel>
+                                    <CheckBox IsChecked="{Binding IsChecked}" IsEnabled="{Binding IsSelectable}"
+                                              VerticalAlignment="Center" AutomationProperties.Name="{Binding DisplayName}"/>
+                                    <TextBlock Text="{Binding DeleteModeText}" DockPanel.Dock="Right" Width="80" TextAlignment="Center"
+                                               Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    <TextBlock Text="{Binding FileCountText, Mode=OneWay}" DockPanel.Dock="Right" Width="64" TextAlignment="Right"
+                                               Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    <TextBlock Text="{Binding SizeText, Mode=OneWay}" DockPanel.Dock="Right" Width="90" TextAlignment="Right"
+                                               FontFamily="Consolas" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                    <StackPanel Orientation="Horizontal" Margin="12,0,12,0" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource TextPrimaryBrush}"/>
+                                        <TextBlock Text="{Binding RiskClassText}" Margin="10,0,0,0" FontSize="11"
+                                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="{Binding ErrorText, Mode=OneWay}" Margin="10,0,0,0" FontSize="11"
+                                                   Foreground="{StaticResource DangerBrush}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </GroupBox>
+
+        <!-- AI 缓存管家 -->
+        <GroupBox Grid.Row="3" Header="AI 缓存管家">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding AiRules}" AutomationProperties.Name="AI 缓存管家类别列表">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Padding="4,7" BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="0,0,0,1">
+                                <Border.ToolTip>
+                                    <StackPanel MaxWidth="420">
+                                        <TextBlock Text="{Binding Description}" TextWrapping="Wrap" FontWeight="SemiBold"/>
+                                        <TextBlock Text="{Binding ConsequenceNote}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                    </StackPanel>
+                                </Border.ToolTip>
+                                <DockPanel>
+                                    <CheckBox IsChecked="{Binding IsChecked}" IsEnabled="{Binding IsSelectable}"
+                                              VerticalAlignment="Center" AutomationProperties.Name="{Binding DisplayName}"/>
+                                    <TextBlock Text="{Binding DeleteModeText}" DockPanel.Dock="Right" Width="80" TextAlignment="Center"
+                                               Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    <TextBlock Text="{Binding FileCountText, Mode=OneWay}" DockPanel.Dock="Right" Width="64" TextAlignment="Right"
+                                               Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    <TextBlock Text="{Binding SizeText, Mode=OneWay}" DockPanel.Dock="Right" Width="90" TextAlignment="Right"
+                                               FontFamily="Consolas" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                    <StackPanel Orientation="Horizontal" Margin="12,0,12,0" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource TextPrimaryBrush}"/>
+                                        <TextBlock Text="{Binding RiskClassText}" Margin="10,0,0,0" FontSize="11"
+                                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="{Binding ErrorText, Mode=OneWay}" Margin="10,0,0,0" FontSize="11"
+                                                   Foreground="{StaticResource DangerBrush}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </GroupBox>
+    </Grid>
+</local:BasePage>
