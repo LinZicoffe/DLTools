@@ -85,10 +85,17 @@
                             </Style>
                         </Button.Style>
                     </Button>
-                    <Button Content="IP 扫描" Command="{Binding ShowIpScanCommand}" Height="44">
+                    <Button Content="IP 扫描" Command="{Binding ShowIpScanCommand}" Height="44" Margin="0,0,0,10">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
                                 <Style.Triggers><DataTrigger Binding="{Binding IsIpScanSelected}" Value="True"><Setter Property="Background" Value="#E8F1FB"/><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button Content="高速下载" Command="{Binding ShowDownloadCommand}" Height="44">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
+                                <Style.Triggers><DataTrigger Binding="{Binding IsDownloadSelected}" Value="True"><Setter Property="Background" Value="#E8F1FB"/><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers>
                             </Style>
                         </Button.Style>
                     </Button>

@@ -47,27 +47,36 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         var host = BackgroundTaskHost.Shared;
-        if (!_forceClose && host.IsBusy)
+        var scheduler = 烧录上位机程序.Services.Downloads.DownloadScheduler.Shared;
+        var downloadsBusy = scheduler.HasActiveWork;
+        if (!_forceClose && (host.IsBusy || downloadsBusy))
         {
             // 烧录任务跑在线程池上；直接关窗会令进程在原生 DLL 调用中途退出，
             // 芯片可能停在半擦除/半写入状态且 J-Link 会话不会被正常关闭
             e.Cancel = true;
-            bool flashing = host.CurrentKind == BackgroundOperationKind.Flashing;
+            bool flashing = host.IsBusy && host.CurrentKind == BackgroundOperationKind.Flashing;
+            var downloadLine = downloadsBusy ? "\n下载任务将全部暂停，未完成部分保留续传记录。" : "";
             // A native MessageBox pumps the dispatcher without changing WPF IsEnabled.
             // Publish this gate before showing it so packaging cannot nest another question on top.
             if (!_closeConfirmation.TryBegin()) return;
             MessageBoxResult answer;
             try
             {
-                answer = MessageBox.Show(this,
-                    flashing
+                var hostQuestion = !host.IsBusy ? ""
+                    : flashing
                         ? I18nService.GetString("烧录进行中，强制退出可能使芯片停留在半擦除/半写入状态") + "\n" +
                           I18nService.GetString("确定要停止烧录并退出吗？")
                         : host.CurrentKind == BackgroundOperationKind.Authorization
                             ? "授权档案任务正在进行。确定取消任务，等待安全保存结束后退出吗？"
                             : host.CurrentKind == BackgroundOperationKind.IpScanning
                                 ? "IP 扫描正在进行。确定取消扫描，等待在途探测结束后退出吗？"
-                                : "项目检查或打包任务正在进行。确定取消任务，等待进程结束及文件恢复后退出吗？",
+                                : "项目检查或打包任务正在进行。确定取消任务，等待进程结束及文件恢复后退出吗？";
+                var downloadQuestion = !downloadsBusy
+                    ? ""
+                    : host.IsBusy ? "下载任务正在进行，将随上述任务一并暂停（保留续传记录）。确定退出吗？" + downloadLine
+                    : "下载任务正在进行。确定暂停全部下载并退出吗？未完成部分将保留续传记录，下次启动后可继续。";
+                answer = MessageBox.Show(this,
+                    (hostQuestion + downloadQuestion).Trim(),
                     I18nService.GetString("确认退出"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
             }
             catch (Exception error)
@@ -101,11 +110,20 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                 }
                 if (task is not null)
                 {
-                    if (waitingForFlashing)
-                        await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(15)));
-                    else
-                        await task; // 打包必须等进程退出、恢复目录完成，不得超时杀进程。
+                    try
+                    {
+                        if (waitingForFlashing)
+                            await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(15)));
+                        else
+                            await task; // 打包必须等进程退出、恢复目录完成，不得超时杀进程。
+                    }
+                    catch
+                    {
+                        // host 任务异常也代表已到终态；下载排空必须继续执行，不能被跳过
+                    }
                 }
+                if (downloadsBusy)
+                    await scheduler.CancelAllAndDrainAsync(); // 下载引擎排空后日志已落盘，可安全退出
             }
             catch { /* 任务异常也代表已到终态；烧录保留原来的15秒等待上限。 */ }
             finally
