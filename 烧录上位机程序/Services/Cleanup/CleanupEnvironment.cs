@@ -55,6 +55,12 @@ public sealed record CleanupEnvironment
         {
             Path.Combine(profile, ".zcode", "cli", "memories"),
             Path.Combine(profile, ".zcode", "cli", "config.json"),
+            // 单体数据库型对话记录本体（db.sqlite 及活跃 -wal/-shm）按文件列入永不名单：
+            // 不依赖「仅展示规则」的间接保护，未来任何规则误把它们变成候选都会被守卫直接拒绝；
+            // 只保护文件而不保护 db 目录本身，zcode-session-db 的只读统计（ReportPath）仍可走目录入口。
+            Path.Combine(profile, ".zcode", "cli", "db", "db.sqlite"),
+            Path.Combine(profile, ".zcode", "cli", "db", "db.sqlite-wal"),
+            Path.Combine(profile, ".zcode", "cli", "db", "db.sqlite-shm"),
             Path.Combine(profile, ".claude", "CLAUDE.md"),
             Path.Combine(profile, ".claude", "settings.json")
         };

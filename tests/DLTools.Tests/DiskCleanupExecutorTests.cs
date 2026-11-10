@@ -66,7 +66,8 @@ public class DiskCleanupExecutorTests : IDisposable
         Assert.False(Directory.Exists(nested)); // 清空后修剪
         Assert.True(File.Exists(keep));         // 非候选绝不动
         Assert.True(Directory.Exists(root));    // 枚举根保留
-        Assert.All(ReadOpenLog(audit.Path), line => Assert.StartsWith("20", line));
+        Assert.All(ReadOpenLog(audit.Path), line =>
+            Assert.Matches(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", line)); // 逐行 "O" 时间戳前缀
     }
 
     [Fact]
@@ -184,18 +185,68 @@ public class DiskCleanupExecutorTests : IDisposable
     }
 
     [Fact]
-    public void AuditLog_CreateNewRejectsExistingFileAndRotatesStaleLogs()
+    public void AuditLog_CreateNewRejectsExistingFileName()
     {
         var directory = Path.Combine(_workspace.Root, "audit-rotate");
         var first = CleanupAuditLog.CreateNew(directory, new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.Zero));
         first.Dispose();
         Assert.Throws<IOException>(() => CleanupAuditLog.CreateNew(directory,
             new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.Zero))); // 同名时间戳不允许覆盖
+    }
 
-        using var second = CleanupAuditLog.CreateNew(directory, new DateTimeOffset(2026, 11, 2, 0, 0, 0, TimeSpan.Zero));
-        second.Write("hello");
-        second.Check();
-        Assert.Contains("hello", ReadOpenLog(second.Path)[^1]);
+    [Fact]
+    public void AuditLog_RotationKeepsNewestTwentyIncludingCurrentRun()
+    {
+        var directory = Path.Combine(_workspace.Root, "audit-rotate-many");
+        Directory.CreateDirectory(directory);
+        // 预置 21 份历史日志（文件名定长时间戳，字典序=时间序）；新建 1 份后总量必须收敛到 20。
+        var historical = Enumerable.Range(0, 21)
+            .Select(i => Path.Combine(directory, $"cleanup_{20200101 + i:D8}_010101_000.log"))
+            .ToArray();
+        foreach (var path in historical) File.WriteAllText(path, "stale");
+
+        using var current = CleanupAuditLog.CreateNew(directory,
+            new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero));
+
+        var remaining = Directory.GetFiles(directory, "cleanup_*.log")
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
+        Assert.Equal(20, remaining.Length);
+        Assert.DoesNotContain(historical[0], remaining); // 最旧的 2 份被轮换删除
+        Assert.DoesNotContain(historical[1], remaining);
+        Assert.Contains(historical[2], remaining);       // 保留界：第 3 旧起保留
+        Assert.Contains(current.Path, remaining);        // 本次运行日志必然存活
+    }
+
+    /// <summary>模拟审计写入故障（磁盘满一类）：第一条审计写入就失败时，执行器必须当场中止，
+    /// 不允许出现「删了但无审计」的窗口——这是审计中止粒度的契约测试。</summary>
+    private sealed class ThrowingAuditLog : CleanupAuditLog
+    {
+        public ThrowingAuditLog(string path) : base(path, new StreamWriter(path)) { }
+
+        public override void Write(string line) => throw new IOException("模拟审计写入失败");
+    }
+
+    [Fact]
+    public void Execute_AuditWriteFailure_AbortsBeforeAnyDeletion()
+    {
+        var (guard, executor, _) = Create();
+        var root = Path.Combine(guard.Environment.Temp, "auditless");
+        var a = DiskCleanupTestHelpers.WriteFile(Path.Combine(root, "a.bin"), 100);
+        var b = DiskCleanupTestHelpers.WriteFile(Path.Combine(root, "b.bin"), 100);
+
+        var walk = new CleanupWalkResult(
+            [new WalkFileCandidate(a, 100, _clock.GetUtcNow(), _clock.GetUtcNow()),
+             new WalkFileCandidate(b, 100, _clock.GetUtcNow(), _clock.GetUtcNow())],
+            [], [], 200, 2, 0, 0, []);
+        var auditDirectory = Path.Combine(_workspace.Root, "audit-throw");
+        Directory.CreateDirectory(auditDirectory);
+        using var audit = new ThrowingAuditLog(Path.Combine(auditDirectory, "cleanup_20261110_120000_000.log"));
+
+        Assert.Throws<IOException>(() => executor.Execute("rule", walk, CleanupDeleteMode.Permanent,
+            simulate: false, audit, CancellationToken.None));
+
+        Assert.True(File.Exists(a)); // 规则头审计写失败 → 立刻中止，两个文件都不得被删除
+        Assert.True(File.Exists(b));
     }
 
     public void Dispose() => _workspace.Dispose();

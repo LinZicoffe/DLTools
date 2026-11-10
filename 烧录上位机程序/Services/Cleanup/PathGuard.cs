@@ -33,8 +33,9 @@ public sealed class PathGuard
     {
         if (Path.IsPathRooted(relativePath))
             throw new IOException($"规则相对路径不能是绝对路径：{relativePath}");
-        if (relativePath.Contains("..", StringComparison.Ordinal))
-            throw new IOException($"规则相对路径不允许包含 ..：{relativePath}");
+        // 按段精确判定 ".."：子串判定会误伤 foo..bar 这类合法名字。
+        if (relativePath.Split('\\').Any(segment => segment == ".."))
+            throw new IOException($"规则相对路径不允许包含 .. 段：{relativePath}");
 
         var anchorRoot = CleanupEnvironment.TryNormalize(_environment.AnchorRoot(anchor))
             ?? throw new IOException($"锚点基座不可用：{anchor}");

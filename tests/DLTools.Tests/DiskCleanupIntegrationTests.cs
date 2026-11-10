@@ -45,4 +45,28 @@ public class DiskCleanupIntegrationTests
             if (File.Exists(source)) File.Delete(source); // 失败路径下的兜底清理
         }
     }
+
+    [DiskCleanupIntegrationFact]
+    public void RealRecycleBin_LongPathFile_DisappearsFromSource()
+    {
+        // >260 字符深路径：目录树用 \\?\ 前缀构造（系统可能未开长路径策略），
+        // 送回收站用的是普通路径字符串——验证「原样失败 → \\?\ 前缀重试」的策略在真实 shell 下成立。
+        var root = Path.Combine(Path.GetTempPath(), "dltools-cleaner-long-" + Guid.NewGuid().ToString("N"));
+        var current = root;
+        while (current.Length < 260) current = Path.Combine(current, new string('d', 60));
+        var source = Path.Combine(current, "deep.txt");
+        Directory.CreateDirectory(@"\\?\" + current);
+        File.WriteAllText(@"\\?\" + source, "long path recycle fixture");
+        try
+        {
+            Assert.True(source.Length >= 260, $"长路径构造失败，长度 {source.Length}");
+            var sink = new 烧录上位机程序.Services.Cleanup.ShellFileOperationRecycleBin();
+            Assert.True(sink.TrySend(source, out var error), $"长路径回收失败：{error}");
+            Assert.False(File.Exists(source));
+        }
+        finally
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { /* 兜底尽力 */ }
+        }
+    }
 }

@@ -144,8 +144,6 @@ public partial class CleanupViewModel : ObservableObject
         CleanupScanResult? result = null;
         try
         {
-            // 只有真正拿到全局后台所有权才清空旧数字（与 IP 扫描同一模式）。
-            var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             if (!_host.TryStart(BackgroundOperationKind.DiskCleanup, token =>
             {
                 var progress = new CallbackProgress(update => _dispatcher.InvokeAsync(() =>
@@ -160,23 +158,20 @@ public partial class CleanupViewModel : ObservableObject
                 Status = "另一个后台任务正在进行，请等待结束后重试。";
                 return;
             }
+            // 只有真正拿到全局后台所有权才清空旧数字（与 IP 扫描同一模式）。
             _ownedTask = task;
-            try
+            foreach (var row in AllRules)
             {
-                foreach (var row in AllRules)
-                {
-                    row.Scanned = false;
-                    row.TotalBytes = 0;
-                    row.FileCount = 0;
-                    row.Error = null;
-                }
-                ProgressPercent = 0;
-                ProgressText = "开始扫描…";
-                Status = "正在扫描（只读，不删除任何文件）…";
-                OnPropertyChanged(nameof(SelectedSummaryText));
-                CancelCommand.NotifyCanExecuteChanged();
+                row.Scanned = false;
+                row.TotalBytes = 0;
+                row.FileCount = 0;
+                row.Error = null;
             }
-            finally { ready.TrySetResult(); }
+            ProgressPercent = 0;
+            ProgressText = "开始扫描…";
+            Status = "正在扫描（只读，不删除任何文件）…";
+            OnPropertyChanged(nameof(SelectedSummaryText));
+            CancelCommand.NotifyCanExecuteChanged();
             await task;
 
             if (result is null || result.Cancelled)
@@ -219,7 +214,15 @@ public partial class CleanupViewModel : ObservableObject
         if (!CanClean()) return;
         var selected = AllRules.Where(r => r.IsChecked && r.IsSelectable).ToList();
         var summary = SelectedSummaryText + "\n\n永久删除的类别无法从本工具找回；移入回收站的类别可从回收站还原。\n确定开始清理吗？";
-        if (!_confirm(summary))
+        bool confirmed;
+        try { confirmed = _confirm(summary); }
+        catch (Exception error)
+        {
+            // 确认对话框本身出异常（等价 async-void 入口）不允许逃逸崩进程：按未确认处理。
+            Status = "确认对话框异常，未执行清理：" + error.Message;
+            return;
+        }
+        if (!confirmed)
         {
             Status = "已取消：未执行任何删除。";
             return;
@@ -230,7 +233,6 @@ public partial class CleanupViewModel : ObservableObject
         CleanupResult? result = null;
         try
         {
-            var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             if (!_host.TryStart(BackgroundOperationKind.DiskCleanup, token =>
             {
                 var progress = new CallbackProgress(update => _dispatcher.InvokeAsync(() =>
@@ -238,7 +240,7 @@ public partial class CleanupViewModel : ObservableObject
                     ProgressText = update.Message;
                     ProgressPercent = update.Percent;
                 }));
-                result = _engine.Clean(selected.Select(r => r.Id).ToArray(), LoadSettings(),
+                result = _engine.Clean(selected.Select(r => r.Id).ToArray(), LoadSettings(strict: true),
                     simulate: false, progress, token);
                 return Task.CompletedTask;
             }, out var task))
@@ -247,14 +249,10 @@ public partial class CleanupViewModel : ObservableObject
                 return;
             }
             _ownedTask = task;
-            try
-            {
-                ProgressPercent = 0;
-                ProgressText = "开始清理…";
-                Status = "正在清理（每个文件删除前都会重新校验，占用中的文件自动跳过）…";
-                CancelCommand.NotifyCanExecuteChanged();
-            }
-            finally { ready.TrySetResult(); }
+            ProgressPercent = 0;
+            ProgressText = "开始清理…";
+            Status = "正在清理（每个文件删除前都会重新校验，占用中的文件自动跳过）…";
+            CancelCommand.NotifyCanExecuteChanged();
             await task;
 
             if (result is null) return;
@@ -274,22 +272,38 @@ public partial class CleanupViewModel : ObservableObject
                     (result.FailedCount > 0 ? $" / 失败 {result.FailedCount} 项（多为文件占用）" : "") +
                     "。可重新扫描确认。";
             }
-            foreach (var row in AllRules) row.Scanned = false;
-            OnPropertyChanged(nameof(SelectedSummaryText));
+            ResetScanNumbers();
         }
         catch (OperationCanceledException)
         {
             Status = "清理已取消（已完成部分详见审计日志）。";
+            ResetScanNumbers();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
         {
             Status = "清理失败：" + error.Message;
+            ResetScanNumbers();
         }
         finally
         {
             _ownedTask = null;
             IsBusy = false;
         }
+    }
+
+    /// <summary>清理结束（成功/取消/失败）后清空扫描数字：这批数字描述的是已被删除的内容，
+    /// 保留会让页头摘要与二次确认继续显示陈旧的「可释放」量。重新扫描后恢复。</summary>
+    private void ResetScanNumbers()
+    {
+        foreach (var row in AllRules)
+        {
+            row.Scanned = false;
+            row.TotalBytes = 0;
+            row.FileCount = 0;
+            row.Error = null;
+        }
+        OnPropertyChanged(nameof(SelectedSummaryText));
+        CleanCommand.NotifyCanExecuteChanged();
     }
 
     private bool CanCancel() => IsBusy && !_cancelRequested && _ownedTask is { IsCompleted: false }
@@ -317,8 +331,9 @@ public partial class CleanupViewModel : ObservableObject
             System.Windows.Clipboard.SetText(LastAuditPath);
             Status = "审计日志路径已复制，可在资源管理器地址栏粘贴打开：" + LastAuditPath;
         }
-        catch (Exception error) when (error is System.Runtime.InteropServices.COMException)
+        catch (Exception error) when (error is System.Runtime.InteropServices.ExternalException)
         {
+            // Clipboard.SetText 抛的是 ExternalException（COMException 的基类）——捕基类才能接住剪贴板降级。
             Status = "复制审计路径失败：" + error.Message;
         }
     }
@@ -330,14 +345,21 @@ public partial class CleanupViewModel : ObservableObject
         CleanCommand.NotifyCanExecuteChanged();
     }
 
-    private CleanupSettings LoadSettings()
+    private CleanupSettings LoadSettings(bool strict = false)
     {
         try { return _settingsStore.Load(); }
-        catch (IOException) { return CleanupSettings.Default; } // 设置损坏时退回默认值，不阻断扫描/清理
+        catch (IOException) when (!strict)
+        {
+            return CleanupSettings.Default; // 扫描路径：损坏时退回默认值，不阻断只读预览
+        }
+        // 清理路径（strict）：设置损坏时不得静默改用默认阈值——用户可能把年龄阈值调得更保守，
+        // 默认值反而更激进，确认框引用的数字与实际执行的阈值将不一致。中止并提示修复。
     }
 
     private static bool DefaultConfirm(string message) =>
-        System.Windows.MessageBox.Show(message, "确认清理", System.Windows.MessageBoxButton.YesNo,
+        // 带 owner：确认期间主窗口被模态禁用，杜绝叠出第二个确认框/关窗绕过确认。
+        System.Windows.MessageBox.Show(System.Windows.Application.Current?.MainWindow, message, "确认清理",
+            System.Windows.MessageBoxButton.YesNo,
             System.Windows.MessageBoxImage.Warning) == System.Windows.MessageBoxResult.Yes;
 
     public static string FormatSize(long bytes) => bytes switch

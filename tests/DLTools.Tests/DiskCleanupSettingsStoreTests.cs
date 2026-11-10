@@ -58,6 +58,39 @@ public class DiskCleanupSettingsStoreTests : IDisposable
     }
 
     [Fact]
+    public void Load_KeepsLegalBoundaryValuesUntouched()
+    {
+        // 钳制是闭区间：恰好落在边界上的合法用户设置必须原值保留（开区间/越界−1 的实现会被此用例拦截）。
+        File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new CleanupSettingsStore.SettingsDocument
+        {
+            FreshnessHours = 720,
+            LogAgeDays = 3650,
+            ArtifactAgeDays = 3650,
+            ConversationAgeDays = 3650,
+            BackupKeepCount = 20
+        }));
+        var upper = new CleanupSettingsStore(SettingsPath).Load();
+        Assert.Equal(720, upper.FreshnessHours);
+        Assert.Equal(3650, upper.LogAgeDays);
+        Assert.Equal(3650, upper.ArtifactAgeDays);
+        Assert.Equal(3650, upper.ConversationAgeDays);
+        Assert.Equal(20, upper.BackupKeepCount);
+
+        File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new CleanupSettingsStore.SettingsDocument
+        {
+            FreshnessHours = 1,
+            LogAgeDays = 1,
+            ArtifactAgeDays = 1,
+            ConversationAgeDays = 1,
+            BackupKeepCount = 1
+        }));
+        var lower = new CleanupSettingsStore(SettingsPath).Load();
+        Assert.Equal(1, lower.FreshnessHours);
+        Assert.Equal(1, lower.LogAgeDays);
+        Assert.Equal(1, lower.BackupKeepCount);
+    }
+
+    [Fact]
     public void Load_CorruptFile_ThrowsWithoutSilentReset()
     {
         File.WriteAllText(SettingsPath, "{ not-json");

@@ -70,7 +70,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                             ? "授权档案任务正在进行。确定取消任务，等待安全保存结束后退出吗？"
                             : host.CurrentKind == BackgroundOperationKind.IpScanning
                                 ? "IP 扫描正在进行。确定取消扫描，等待在途探测结束后退出吗？"
-                                : "项目检查或打包任务正在进行。确定取消任务，等待进程结束及文件恢复后退出吗？";
+                                : host.CurrentKind == BackgroundOperationKind.DiskCleanup
+                                    ? "C盘清理正在进行。确定取消清理，等待审计日志写入完成后退出吗？"
+                                    : "项目检查或打包任务正在进行。确定取消任务，等待进程结束及文件恢复后退出吗？";
                 var downloadQuestion = !downloadsBusy
                     ? ""
                     : host.IsBusy ? "下载任务正在进行，将随上述任务一并暂停（保留续传记录）。确定退出吗？" + downloadLine

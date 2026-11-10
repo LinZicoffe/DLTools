@@ -32,31 +32,46 @@ public sealed record CleanupWalkResult(
         directories.OrderByDescending(d => d.Count(c => c == Path.DirectorySeparatorChar))
             .ThenBy(d => d, StringComparer.OrdinalIgnoreCase).ToArray();
 
-    /// <summary>合并同一规则多个目标/匹配根的遍历结果（目录去重；文件按路径排序保持确定性）。</summary>
+    /// <summary>合并同一规则多个目标/匹配根的遍历结果。目录与文件都按路径去重（OrdinalIgnoreCase）——
+    /// 同一规则多个 target 的枚举范围重叠时，同一文件不得双计字节、也不得作为候选删两次；
+    /// 聚合数字一律从去重后的集合重算，保证与候选列表一致。</summary>
     public static CleanupWalkResult Merge(IEnumerable<CleanupWalkResult> results)
     {
-        var files = new List<WalkFileCandidate>();
+        var files = new Dictionary<string, WalkFileCandidate>(StringComparer.OrdinalIgnoreCase);
         var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var deletableRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        long totalBytes = 0;
-        int fileCount = 0, directoryCount = 0, skippedCount = 0;
+        int skippedCount = 0;
         var summaries = new List<CleanupRootSummary>();
         foreach (var result in results)
         {
-            files.AddRange(result.Files);
+            foreach (var file in result.Files)
+                files.TryAdd(file.Path, file);
             directories.UnionWith(result.Directories);
             deletableRoots.UnionWith(result.DeletableWhenEmptyRoots);
-            totalBytes += result.TotalBytes;
-            fileCount += result.FileCount;
-            directoryCount += result.DirectoryCount;
             skippedCount += result.SkippedCount;
             summaries.AddRange(result.RootSummaries);
         }
+        var mergedFiles = files.Values.OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase).ToArray();
+        // ReportPath 走「Files 恒空、TotalBytes/FileCount 直填」的只读统计通道（不产生候选），
+        // 此类结果的聚合沿用累加；候选类结果一律从去重后的文件列表重算，保证与候选一致。
+        long totalBytes;
+        int fileCount;
+        if (mergedFiles.Length > 0)
+        {
+            totalBytes = mergedFiles.Sum(f => f.Bytes);
+            fileCount = mergedFiles.Length;
+        }
+        else
+        {
+            var resultsList = results.ToList();
+            totalBytes = resultsList.Sum(r => r.TotalBytes);
+            fileCount = resultsList.Sum(r => r.FileCount);
+        }
         return new CleanupWalkResult(
-            files.OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase).ToArray(),
+            mergedFiles,
             DepthDescending(directories),
             deletableRoots.ToArray(),
-            totalBytes, fileCount, directoryCount, skippedCount,
+            totalBytes, fileCount, directories.Count, skippedCount,
             summaries.OrderByDescending(s => s.Bytes).ThenBy(s => s.Root, StringComparer.OrdinalIgnoreCase).ToArray());
     }
 }
@@ -77,9 +92,11 @@ public sealed class CleanupWalker
             protectedFileNames ?? CleanupEnvironment.DefaultProtectedFileNames, StringComparer.OrdinalIgnoreCase);
     }
 
-    /// <summary>仅支持单个 * 的文件名 glob（OrdinalIgnoreCase），与规则目录测试共用同一实现。</summary>
+    /// <summary>仅支持单个 * 的文件名 glob（OrdinalIgnoreCase），与规则目录测试共用同一实现。
+    /// 空模式不匹配任何名字（防御注入规则）；`?` 按字面字符处理；含多个 `*` 时段间贪心无回溯（漏配方向安全）。</summary>
     public static bool MatchesGlob(string name, string pattern)
     {
+        if (string.IsNullOrEmpty(pattern)) return false;
         var parts = pattern.Split('*');
         var index = 0;
         for (var i = 0; i < parts.Length; i++)
@@ -153,7 +170,9 @@ public sealed class CleanupWalker
     {
         var extensions = new HashSet<string>(request.Names, StringComparer.OrdinalIgnoreCase);
         var collector = new Collector();
-        foreach (var entry in EnumerateTree(request.Root, collector, ct))
+        // 文件匹配类不依赖目录修剪：不入册子目录，避免空目录修剪越出本规则的语义边界
+        //（例如 ai-trace-logs 遍历整个 ~/.cache 时，模型目录里的空骨架不得被顺手移除）。
+        foreach (var entry in EnumerateTree(request.Root, collector, ct, recordSubdirectories: false))
         {
             if (entry.IsDirectory) continue;
             if (!extensions.Contains(Path.GetExtension(entry.Path))) continue;
@@ -184,10 +203,15 @@ public sealed class CleanupWalker
         var keep = Math.Max(1, request.Settings.BackupKeepCount);
         var matched = new List<Entry>();
         var collector = new Collector();
-        foreach (var entry in EnumerateTree(request.Root, collector, ct))
+        // 同 WalkByExtension：keep-N 是文件轮换，不入册子目录、不做空目录修剪。
+        foreach (var entry in EnumerateTree(request.Root, collector, ct, recordSubdirectories: false))
         {
             if (entry.IsDirectory) continue;
             if (!request.Names.Any(pattern => MatchesGlob(Path.GetFileName(entry.Path), pattern))) continue;
+            // 与其他 walker 路径同一套过滤（AddFiltered 语义）：云占位/受保护文件名不入候选也不参与保留轮换，
+            // 否则扫描预览与执行侧数字不一致。reparse 已被 EnumerateTree 拦截。
+            if (PathGuard.IsCloudPlaceholder(entry.Attributes)) { collector.Skipped++; continue; }
+            if (_protectedFileNames.Contains(Path.GetFileName(entry.Path))) { collector.Skipped++; continue; }
             collector.Skipped++; // 先按「跳过（保留）」计数，进入保留名单的最终保持跳过，落选者改记候选。
             matched.Add(entry);
         }
@@ -204,7 +228,8 @@ public sealed class CleanupWalker
     private CleanupWalkResult WalkReportSize(CleanupWalkRequest request, CancellationToken ct)
     {
         var collector = new Collector();
-        foreach (var entry in EnumerateTree(request.Root, collector, ct))
+        // 只统计：不产生候选也不修剪目录，无需入册子目录。
+        foreach (var entry in EnumerateTree(request.Root, collector, ct, recordSubdirectories: false))
         {
             if (entry.IsDirectory) continue;
             collector.TotalBytes += entry.Bytes;

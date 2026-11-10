@@ -38,6 +38,22 @@ public class DiskCleanupRuleCatalogTests
         };
 
     [Fact]
+    public void Catalog_ReportPathTargets_BelongOnlyToReportOnlyRules()
+    {
+        // Merge 的聚合通道以「Files 是否为空」区分候选类与 ReportPath 直填统计：
+        // 同一规则混用两类目标会让直填统计静默丢失——数据层强制形状互斥，防止未来误配。
+        foreach (var rule in CleanupRuleCatalog.Rules)
+        {
+            var hasReportPath = rule.Targets.Any(t => t.Kind == CleanupTargetKind.ReportPath);
+            if (rule.DeleteMode == CleanupDeleteMode.ReportOnly)
+                Assert.True(rule.Targets.All(t => t.Kind == CleanupTargetKind.ReportPath),
+                    $"仅展示规则 {rule.Id} 的目标应全为 ReportPath");
+            else
+                Assert.False(hasReportPath, $"可执行规则 {rule.Id} 不得混入 ReportPath 目标");
+        }
+    }
+
+    [Fact]
     public void Catalog_HasBothGroupsAndUniqueIds()
     {
         var rules = CleanupRuleCatalog.Rules;

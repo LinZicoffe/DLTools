@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows.Threading;
 using Xunit;
+using 烧录上位机程序.Models.Cleanup;
 using 烧录上位机程序.Services;
 using 烧录上位机程序.Services.Cleanup;
 using 烧录上位机程序.ViewModels;
@@ -118,37 +119,129 @@ public class DiskCleanupViewModelTests
     {
         var harness = new CleanupTestHarness();
         var stale = harness.SeedStaleTempFile("junk.tmp", 8192);
-        DiskCleanupTestHelpers.WriteFile(Path.Combine(harness.Workspace.Root, "temp", "fresh.tmp"), 8);
+        var fresh = DiskCleanupTestHelpers.WriteFile(Path.Combine(harness.Workspace.Root, "temp", "fresh.tmp"), 8);
+        // 新鲜文件显式拨龄：依赖「真实写入时间」在时钟漂移环境会让断言随机翻转。
+        DiskCleanupTestHelpers.SetAge(fresh, harness.Now, TimeSpan.FromHours(1));
         // 确认回调必须注入：默认实现是 MessageBox，测试线程会永久阻塞。
         var vm = NewViewModel(harness, _ => true);
 
         await vm.ScanCommand.ExecuteAsync(null);
+        var userTemp = vm.GeneralRules.Single(r => r.Id == "user-temp");
+        Assert.True(userTemp.Scanned);
+
         await vm.CleanCommand.ExecuteAsync(null);
 
         Assert.Contains("清理完成", vm.Status);
         Assert.False(File.Exists(stale));
-        Assert.True(File.Exists(Path.Combine(harness.Workspace.Root, "temp", "fresh.tmp"))); // 新鲜文件保留
+        Assert.True(File.Exists(fresh)); // 新鲜文件保留
         Assert.True(vm.LastAuditPath.Length > 0);
         Assert.True(File.Exists(vm.LastAuditPath));
         Assert.True(vm.CopyAuditPathCommand.CanExecute(null));
+        // 清理后扫描数字必须整体失效：这批数字描述的是已被删除的内容，
+        // 残留会让页头摘要与下一次确认文本继续显示陈旧的「可释放」量。
+        Assert.False(userTemp.Scanned);
+        Assert.Equal(0, userTemp.TotalBytes);
+        Assert.Equal("未扫描", userTemp.SizeText);
+        Assert.DoesNotContain("永久删除约", vm.SelectedSummaryText);
     });
 
     [Fact]
-    public Task Scan_WhenHostBusy_ReportsConflictWithoutClearingRows() => OnStaAsync(async () =>
+    public Task Scan_WhenHostBusy_ReportsConflictAndKeepsExistingRows() => OnStaAsync(async () =>
     {
         var harness = new CleanupTestHarness();
-        var occupied = new BackgroundTaskHost();
-        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        occupied.TryStart(BackgroundOperationKind.Flashing,
-            async token => await gate.Task.WaitAsync(token), out var blocker);
-        var vm = new CleanupViewModel(harness.Engine, occupied, settingsStore: NewSettingsStore(harness));
+        harness.SeedStaleTempFile("stale.tmp", 4096);
+        var host = new BackgroundTaskHost();
+        var vm = new CleanupViewModel(harness.Engine, host, settingsStore: NewSettingsStore(harness));
 
-        await vm.ScanCommand.ExecuteAsync(null);
+        await vm.ScanCommand.ExecuteAsync(null); // 空闲时正常扫描，行内已有数字
+        var userTemp = vm.GeneralRules.Single(r => r.Id == "user-temp");
+        Assert.True(userTemp.Scanned);
+        Assert.Equal(4096, userTemp.TotalBytes);
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(host.TryStart(BackgroundOperationKind.Flashing,
+            async token => await gate.Task.WaitAsync(token), out var blocker));
+        await vm.ScanCommand.ExecuteAsync(null); // 冲突：数字必须原样保留，不得清空
 
         Assert.Contains("另一个后台任务正在进行", vm.Status);
         Assert.False(vm.IsBusy);
+        Assert.True(userTemp.Scanned);
+        Assert.Equal(4096, userTemp.TotalBytes);
         gate.SetResult();
         await blocker;
+    });
+
+    [Fact]
+    public Task Clean_CorruptSettings_AbortsInsteadOfSilentlyUsingDefaults() => OnStaAsync(async () =>
+    {
+        var harness = new CleanupTestHarness();
+        var stale = harness.SeedStaleTempFile("settingsbroken.tmp", 2048);
+        var settingsPath = Path.Combine(harness.Workspace.Root, "settings.json");
+        File.WriteAllText(settingsPath, "{ not-json"); // 损坏：清理路径不得静默改用默认（可能更激进的）阈值
+        var vm = NewViewModel(harness, _ => true);
+
+        await vm.CleanCommand.ExecuteAsync(null);
+
+        Assert.Contains("清理失败", vm.Status);
+        Assert.Contains("清理设置", vm.Status);
+        Assert.True(File.Exists(stale)); // 中止：一个文件都不动
+        Assert.False(vm.IsBusy);
+    });
+
+    [Fact]
+    public Task Clean_WhenHostBusy_ReportsConflictWithoutDeleting() => OnStaAsync(async () =>
+    {
+        var harness = new CleanupTestHarness();
+        var stale = harness.SeedStaleTempFile("busy.tmp", 2048);
+        var host = new BackgroundTaskHost();
+        var vm = new CleanupViewModel(harness.Engine, host, settingsStore: NewSettingsStore(harness), confirm: _ => true);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(host.TryStart(BackgroundOperationKind.Flashing,
+            async token => await gate.Task.WaitAsync(token), out var blocker));
+
+        await vm.CleanCommand.ExecuteAsync(null);
+
+        Assert.Contains("另一个后台任务正在进行", vm.Status);
+        Assert.False(vm.IsBusy);
+        Assert.True(File.Exists(stale)); // 没拿到后台所有权，一个文件都不能动
+        gate.SetResult();
+        await blocker;
+    });
+
+    /// <summary>可阻塞的替身引擎：Clean 进入后停在 WaitOne，直到取消令牌触发（验证 VM 取消中态）。</summary>
+    private sealed class BlockingCleanupEngine : CleanupEngine
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override CleanupResult Clean(IReadOnlyCollection<string> ruleIds, CleanupSettings settings,
+            bool simulate, IProgress<CleanupProgress>? progress, CancellationToken cancellationToken)
+        {
+            Entered.TrySetResult();
+            if (cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(30)))
+                throw new OperationCanceledException(cancellationToken);
+            return new CleanupResult(false, false, null, 0, 0, 0, 0, 0, [], "", DateTimeOffset.UtcNow);
+        }
+    }
+
+    [Fact]
+    public Task Clean_CancelDuringRun_EntersCancellingStateAndRecovers() => OnStaAsync(async () =>
+    {
+        var harness = new CleanupTestHarness();
+        var engine = new BlockingCleanupEngine();
+        var vm = new CleanupViewModel(engine, new BackgroundTaskHost(),
+            settingsStore: NewSettingsStore(harness), confirm: _ => true);
+
+        var cleanTask = vm.CleanCommand.ExecuteAsync(null);
+        await engine.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5)); // 引擎已进入清理
+        Assert.True(vm.CancelCommand.CanExecute(null));
+
+        vm.CancelCommand.Execute(null);
+
+        Assert.False(vm.CancelCommand.CanExecute(null)); // 取消中态：重复取消被抑制
+        Assert.Contains("正在取消", vm.Status);
+        await cleanTask.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(vm.IsBusy);                          // 取消完成后忙态复位
+        Assert.Contains("取消", vm.Status);
     });
 
     [Fact]

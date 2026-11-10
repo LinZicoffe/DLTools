@@ -74,6 +74,22 @@ public class DiskCleanupPathGuardTests : IDisposable
         var (_, guard) = Create();
         Assert.Throws<IOException>(() => guard.ResolveTargetRoot(CleanupAnchor.UserProfile, @"..\evil"));
         Assert.Throws<IOException>(() => guard.ResolveTargetRoot(CleanupAnchor.UserProfile, @"C:\Windows\Temp"));
+        // ".." 按段精确判定：foo..bar 是合法目录名，不得被子串规则误伤。
+        guard.ResolveTargetRoot(CleanupAnchor.UserProfile, @"foo..bar\cache");
+    }
+
+    [Fact]
+    public void DefaultEnvironment_ProtectsZCodeSessionDatabaseFiles()
+    {
+        // 单体数据库型对话记录本体（db.sqlite 及 -wal/-shm）不依赖「仅展示规则」的间接保护：
+        // 守卫层永不名单按文件直接覆盖，未来任何规则形状误配也碰不到它们。
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        foreach (var name in new[] { "db.sqlite", "db.sqlite-wal", "db.sqlite-shm" })
+        {
+            var expected = Path.GetFullPath(Path.Combine(profile, ".zcode", "cli", "db", name));
+            Assert.Contains(CleanupEnvironment.Default.ProtectedPaths,
+                path => string.Equals(path.TrimEnd(Path.DirectorySeparatorChar), expected, StringComparison.OrdinalIgnoreCase));
+        }
     }
 
     [Fact]
