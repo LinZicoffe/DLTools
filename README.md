@@ -128,12 +128,13 @@ dotnet test "tests/DLTools.Tests/DLTools.Tests.csproj" -c Release --filter Fully
 - 烧录后强制按4096字节分块读回比对；校验通过表示写入内容通过当前校验流程，不代表固件业务已正常运行。
 - 开始烧录时才加载J-Link；缺少驱动不影响打开程序和项目打包。
 - 日志区支持手动拖动、横向滚动和新日志自动滚动到底部；烧录日志布局修复已合并到主分支。
+- 烧录编排（[FlashWorker](烧录上位机程序/Services/JLink/FlashWorker.cs)）与会话加载解耦：原生 J-Link 调用经 `IJLinkSession` 抽象封装，编排序列、取消与失败路径可用内存假会话离线单元测试，无需安装驱动；页面输入校验与参数构造在 [FlashViewModel](烧录上位机程序/ViewModels/FlashViewModel.cs) 中，同样可离线测试。
 
 目标芯片需要手动填写 **J-Link 设备库中的名称**，当前不会自动识别完整型号，也不会自动校正与实板不符的选择。例如实板 `STM32H723ZGT6` 对应设备名 `STM32H723ZG`；填写完整丝印可能提示不支持。“目标已连接”显示的是选定名称，不代表已确认实板型号。支持范围取决于实际加载的 J-Link 驱动和探针，当前软件未逐款验收。
 
 “序列号”填写 J-Link 探针的 USB 序列号，留空自动选择；例如 `COM10` 是串口名称，不能代替该序列号。
 
-流程：Connect → 可选整片擦除 → 按段halt/BeginDownload/WriteMem/EndDownload → 强制Verify → 可选Reset → Close。取消保留原来的段/校验块边界；关窗确认停止后最多等待15秒。
+流程：Connect → 可选整片擦除 → 按段halt/BeginDownload/WriteMem/EndDownload → 强制Verify → 可选Reset → Close。取消保留原来的段/校验块边界；关窗确认停止后最多等待15秒，超时（原生调用未响应取消）会先写审计日志并明确提示芯片状态未知、建议重新上电并重烧验证，不会静默强关。
 
 ## 项目打包
 
@@ -227,7 +228,8 @@ DL小工具.sln
   Models/Authorization/   # 设备档案展示数据（不含密钥）
   Models/Cleanup/         # 清理规则、发现与结果的记录类型
   Services/Packaging/     # 构建、Job进程、事务、Inno、profiles
-  Services/JLink/         # 驱动、探测器、烧录工作器
+  Services/JLink/         # 驱动、探测器、烧录工作器与会话抽象
+  Services/AtomicFileWriter.cs # 各存储共用的原子落盘收尾（Replace/Move）
   Services/Authorization/ # 六位计算、DPAPI档案、加密备份恢复
   Services/IpScanService.cs # 不依赖WPF的IPv4 /24 ICMP扫描
   Services/Downloads/ # 多连接分段下载：引擎/调度器/续传日志/镜像清单/设置存储
@@ -254,7 +256,7 @@ J-Link DLL可放在EXE旁，也支持SEGGER安装目录、IAR捆绑目录和PATH
 
 ## 验证记录与开发进度
 
-截至 2026-11-10，改版与打包、内部授权生成器、日志滚动修复、两套授权 DEMO、高速下载子系统及 C盘清理（AI 缓存管家）均已合并到 `main`。下列结果属于各自记录的验证批次，不表示本次更新文档重新执行了全部测试。
+截至 2026-11-11，改版与打包、内部授权生成器、日志滚动修复、两套授权 DEMO、高速下载子系统、C盘清理（AI 缓存管家）及烧录链加固（外部四维审查修复）均已合并到 `main`。下列结果属于各自记录的验证批次，不表示本次更新文档重新执行了全部测试。
 
 | 日期 / 范围 | 已记录结果 |
 |---|---|
@@ -265,8 +267,9 @@ J-Link DLL可放在EXE旁，也支持SEGGER安装目录、IAR捆绑目录和PATH
 | 2026-10-19 授权 DEMO | DEMO 与主解决方案 Release 构建零警告零错误；DEMO 自动化测试 18/18、实际窗口检查另 18 项通过；用户测试确认并授权合并 |
 | 2026-11-10 高速下载 | F01–F05 与三轮多 Agent 审查修复合入 `main`：Release 构建零警告零错误，全仓 355 通过/0 失败/25 跳过（下载单元 180、本机回环集成 3/3）；用户实测确认符合要求 |
 | 2026-11-10 C盘清理 | C01–C06 与三轮多 Agent 审查修复合入 `main`：Release 构建零警告零错误，全仓 457 通过/0 失败/28 跳过（真实回收站集成 3/3，含 >260 长路径，需 `DLTOOLS_DISKCLEAN_INTEGRATION=1`）；用户简单实测确认符合要求 |
+| 2026-11-11 烧录链加固 | 外部四维审查（并发/安全/架构/测试）交叉核验后修复合入 `main`：烧录页 MVVM 化（FlashViewModel + IJLinkSession 注入）、关窗 15 秒超时补审计日志与用户提示、6 处原子落盘收口为 AtomicFileWriter；Release 构建零警告零错误，全仓 474 通过/0 失败/28 跳过（新增烧录编排/ViewModel/固件解析离线测试约 45 项，不加载 JLink DLL）；FlashPage 界面绑定化的 UI 人工回归待补 |
 
-干净目标机运行时安装、异机授权恢复、重装恢复、真实断电、150% DPI，以及硬件取消/忙碌关窗等完整烧录回归仍待现场验收。高速下载与 C盘清理均以用户 2026-11-10 实测确认为准；高速下载的公网大文件与自建清单联调细节、UI 截图（docs/images/download-ui.png），以及 C盘清理的 UI 截图与首次完整清理数字待补充记录。
+干净目标机运行时安装、异机授权恢复、重装恢复、真实断电、150% DPI，以及硬件取消/忙碌关窗等完整烧录回归仍待现场验收；2026-11-11 烧录页 MVVM 化改动了界面绑定（输入校验提示、按钮状态、阶段颜色、日志滚动），烧录页 UI 人工回归同样待补。高速下载与 C盘清理均以用户 2026-11-10 实测确认为准；高速下载的公网大文件与自建清单联调细节、UI 截图（docs/images/download-ui.png），以及 C盘清理的 UI 截图与首次完整清理数字待补充记录。
 
 改版步骤、提交与审查结果见[功能日志](DL小工具功能更新日志.md)、[方案](docs/实施步骤-DL小工具.md)及[评审记录](docs/评审记录-DL小工具.md)。构建/自动测试、真实安装、窗口检查和硬件验收分开记录，未完成的现场项不由编译替代。
 
