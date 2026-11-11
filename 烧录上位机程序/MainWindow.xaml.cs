@@ -115,9 +115,23 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                     try
                     {
                         if (waitingForFlashing)
-                            await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(15)));
+                        {
+                            // 烧录超时兜底：原生 J-Link 调用（如 USB 异常）可能不响应取消，
+                            // 超时后芯片状态未知——必须留下审计记录并明确告知用户，不允许静默强关。
+                            var timeout = Task.Delay(TimeSpan.FromSeconds(15));
+                            if (await Task.WhenAny(task, timeout) != timeout) { /* 任务如期退出 */ }
+                            else
+                            {
+                                try { LoggerService.Error("烧录任务 15 秒未退出（原生调用未响应取消），即将强制关闭窗口；芯片状态未知，建议重新上电并重烧验证"); } catch { }
+                                MessageBox.Show(this,
+                                    I18nService.GetString("烧录未能在 15 秒内停止，程序即将强制退出。芯片可能处于未知状态，请对目标板重新上电并重新烧录验证。"),
+                                    I18nService.GetString("警告"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                            }
+                        }
                         else
+                        {
                             await task; // 打包必须等进程退出、恢复目录完成，不得超时杀进程。
+                        }
                     }
                     catch
                     {
