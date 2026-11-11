@@ -54,8 +54,7 @@ public sealed class CleanupSettingsStore
                 file.Write(bytes);
                 file.Flush(flushToDisk: true);
             }
-            if (File.Exists(FilePath)) File.Replace(temporary, FilePath, null);
-            else File.Move(temporary, FilePath);
+            AtomicFileWriter.Commit(temporary, FilePath);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }

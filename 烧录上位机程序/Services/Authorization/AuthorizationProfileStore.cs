@@ -264,8 +264,7 @@ public sealed class AuthorizationProfileStore
                 file.Flush(flushToDisk: true);
             }
             cancellationToken.ThrowIfCancellationRequested();
-            if (File.Exists(path)) File.Replace(temporary, path, null);
-            else File.Move(temporary, path);
+            AtomicFileWriter.Commit(temporary, path);
             // Atomic rename is the commit point: cancellation after this must not be reported as rollback.
         }
         finally

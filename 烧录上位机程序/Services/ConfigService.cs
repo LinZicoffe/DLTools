@@ -145,12 +145,9 @@ public sealed class ConfigService
             Directory.CreateDirectory(dir);
             var json = JsonSerializer.Serialize(_config, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(tmpPath, json);
-            // File.Replace 要求目标已存在：全新安装下 user_prefs.json 尚未创建时会抛
-            // FileNotFoundException，导致配置永远无法首次落盘
-            if (File.Exists(_prefsPath))
-                File.Replace(tmpPath, _prefsPath, null);
-            else
-                File.Move(tmpPath, _prefsPath);
+            // 提交辅助内部处理“目标已存在用 Replace / 不存在用 Move”：
+            // 全新安装下 user_prefs.json 尚未创建时 Replace 会抛 FileNotFoundException
+            AtomicFileWriter.Commit(tmpPath, _prefsPath);
             return true;
         }
         catch (Exception ex)

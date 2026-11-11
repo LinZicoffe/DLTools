@@ -195,8 +195,7 @@ public sealed class DownloadJournal
                 file.Write(bytes);
                 file.Flush(flushToDisk: true);
             }
-            if (File.Exists(JournalPath)) File.Replace(temporary, JournalPath, null);
-            else File.Move(temporary, JournalPath);
+            AtomicFileWriter.Commit(temporary, JournalPath);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
