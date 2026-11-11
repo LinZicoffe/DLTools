@@ -39,15 +39,17 @@
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="{i18n:Loc '目标设备:'}" Width="64" TextAlignment="Right"
                            VerticalAlignment="Center" Margin="0,0,10,0"
                            Foreground="{StaticResource TextSecondaryBrush}"/>
-                <TextBox Grid.Row="0" Grid.Column="1" x:Name="DeviceNameBox" Text="STM32H750VB"
+                <TextBox Grid.Row="0" Grid.Column="1" x:Name="DeviceNameBox"
+                         Text="{Binding DeviceName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          Height="34" VerticalContentAlignment="Center"
                          ToolTip="{i18n:Loc 'SEGGER 支持的目标芯片名，须与官方设备列表一致'}"/>
 
                 <TextBlock Grid.Row="0" Grid.Column="3" Text="{i18n:Loc '接口:'}" VerticalAlignment="Center" Margin="0,0,10,0"
                            Foreground="{StaticResource TextSecondaryBrush}"/>
                 <ComboBox Grid.Row="0" Grid.Column="4" x:Name="InterfaceCombo" Width="110" Height="34"
-                          VerticalContentAlignment="Center">
-                    <ComboBoxItem Content="SWD" IsSelected="True"/>
+                          VerticalContentAlignment="Center"
+                          SelectedIndex="{Binding InterfaceIndex, Mode=TwoWay}">
+                    <ComboBoxItem Content="SWD"/>
                     <ComboBoxItem Content="JTAG"/>
                 </ComboBox>
 
@@ -55,8 +57,9 @@
                            VerticalAlignment="Center" Margin="0,0,10,0"
                            Foreground="{StaticResource TextSecondaryBrush}"/>
                 <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal">
-                    <TextBox x:Name="SpeedBox" Text="4000" Width="100" Height="34"
-                             VerticalContentAlignment="Center"
+                    <TextBox x:Name="SpeedBox"
+                             Text="{Binding SpeedText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             Width="100" Height="34" VerticalContentAlignment="Center"
                              ToolTip="{i18n:Loc 'J-Link 下载速度，单位 kHz'}"/>
                     <TextBlock Text="kHz" VerticalAlignment="Center" Margin="8,0,0,0"
                                Foreground="{StaticResource TextSecondaryBrush}"/>
@@ -66,6 +69,7 @@
                            Foreground="{StaticResource TextSecondaryBrush}"/>
                 <StackPanel Grid.Row="1" Grid.Column="4" Orientation="Horizontal">
                     <TextBox x:Name="SerialBox" Width="130" Height="34" VerticalContentAlignment="Center"
+                             Text="{Binding Serial, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              ToolTip="{i18n:Loc '留空时自动连接第一个检测到的 J-Link'}"/>
                     <TextBlock Text="{i18n:Loc '留空自动'}" VerticalAlignment="Center" Margin="8,0,0,0" FontSize="11"
                                Foreground="{StaticResource TextSecondaryBrush}"/>
@@ -91,6 +95,7 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <TextBox Grid.Row="0" Grid.Column="0" x:Name="FilePathBox" Height="34"
+                         Text="{Binding FilePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          VerticalContentAlignment="Center"
                          ToolTip="{i18n:Loc '支持 .hex / .axf / .elf / .bin'}"/>
                 <Button Grid.Row="0" Grid.Column="1" Style="{StaticResource SecondaryButtonStyle}" Click="BrowseFile_Click"
@@ -105,6 +110,7 @@
                     <TextBlock Text="{i18n:Loc 'Bin 起始地址:'}" Width="88" TextAlignment="Right" VerticalAlignment="Center"
                                Margin="0,0,10,0" Foreground="{StaticResource TextSecondaryBrush}"/>
                     <TextBox x:Name="BinAddrBox" Width="150" Height="30" VerticalContentAlignment="Center"
+                             Text="{Binding BinAddrText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              ToolTip="{i18n:Loc '仅 .bin 文件需要：烧录起始地址，如 0x08000000'}"/>
                     <TextBlock Text="{i18n:Loc '仅 .bin 需要（hex/elf 文件自带地址信息）'}" VerticalAlignment="Center"
                                Margin="8,0,0,0" FontSize="11"
@@ -128,6 +134,7 @@
                                Foreground="{StaticResource TextSecondaryBrush}"/>
                     <StackPanel Orientation="Horizontal">
                         <RadioButton Content="{i18n:Loc '整片擦除'}" GroupName="EraseMode" x:Name="EraseChip" Margin="0,0,16,0"
+                                     IsChecked="{Binding IsChipErase, Mode=TwoWay}"
                                      ToolTip="{i18n:Loc '擦除整个芯片全部 Flash（含 bootloader 区域），确认目标无需保留内容时再用'}"/>
                         <RadioButton Content="{i18n:Loc '扇区擦除'}" GroupName="EraseMode" IsChecked="True" x:Name="EraseSector"
                                      ToolTip="{i18n:Loc '只擦除固件覆盖的扇区（默认，保护 bootloader）'}"/>
@@ -140,11 +147,14 @@
                     <TextBlock Text="{i18n:Loc '完成后动作'}" FontSize="11" Margin="0,0,0,6"
                                Foreground="{StaticResource TextSecondaryBrush}"/>
                     <StackPanel Orientation="Horizontal">
-                        <RadioButton Content="{i18n:Loc '复位运行'}" GroupName="PostAction" IsChecked="True" x:Name="ResetRunRadio" Margin="0,0,16,0"
+                        <RadioButton Content="{i18n:Loc '复位运行'}" GroupName="PostAction" x:Name="ResetRunRadio" Margin="0,0,16,0"
+                                     IsChecked="{Binding IsPostResetRun, Mode=TwoWay}"
                                      ToolTip="{i18n:Loc '烧录完成后复位芯片并开始运行固件'}"/>
                         <RadioButton Content="{i18n:Loc '复位暂停'}" GroupName="PostAction" x:Name="ResetHaltRadio" Margin="0,0,16,0"
+                                     IsChecked="{Binding IsPostHalt, Mode=TwoWay}"
                                      ToolTip="{i18n:Loc '烧录完成后复位芯片并暂停在复位向量'}"/>
                         <RadioButton Content="{i18n:Loc '仅烧录'}" GroupName="PostAction"
+                                     IsChecked="{Binding IsPostNone, Mode=TwoWay}"
                                      ToolTip="{i18n:Loc '烧录完成后不复位，芯片保持暂停'}"/>
                     </StackPanel>
                 </StackPanel>
@@ -172,22 +182,38 @@
         <StackPanel Grid.Row="1" Margin="0,14,0,12">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                 <Button x:Name="StartBtn" Click="StartFlash_Click" Style="{StaticResource PrimaryButtonStyle}"
-                        MinWidth="150" Height="38" Margin="4">
+                        MinWidth="150" Height="38" Margin="4"
+                        IsEnabled="{Binding CanStart, Mode=OneWay}">
                     <StackPanel Orientation="Horizontal">
                         <material:MaterialIcon Kind="Flash" Width="15" Height="15" Foreground="White" VerticalAlignment="Center"/>
                         <TextBlock Text="{i18n:Loc '开始烧录'}" Margin="8,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
                 <Button x:Name="StopBtn" Click="StopFlash_Click" Style="{StaticResource SecondaryButtonStyle}"
-                        MinWidth="104" Height="38" Margin="4" IsEnabled="False">
+                        MinWidth="104" Height="38" Margin="4"
+                        IsEnabled="{Binding CanStop, Mode=OneWay}">
                     <StackPanel Orientation="Horizontal">
                         <material:MaterialIcon Kind="Stop" Width="13" Height="13"
                                                Foreground="{StaticResource DangerBrush}" VerticalAlignment="Center"/>
                         <TextBlock Text="{i18n:Loc '停止'}" Margin="7,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
-                <TextBlock x:Name="StageText" Text="{i18n:Loc '就绪'}" VerticalAlignment="Center" Margin="16,0,0,0"
-                           FontWeight="SemiBold" FontSize="14"/>
+                <TextBlock x:Name="StageText" Text="{Binding StageText, Mode=OneWay}" VerticalAlignment="Center" Margin="16,0,0,0"
+                           FontWeight="SemiBold" FontSize="14">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#FF1B1B1B"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding StageVisual}" Value="Success">
+                                    <Setter Property="Foreground" Value="#FF0E700E"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding StageVisual}" Value="Failure">
+                                    <Setter Property="Foreground" Value="#FFC50F1F"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
             </StackPanel>
 
             <DockPanel Margin="28,14,28,0">
@@ -196,7 +222,8 @@
                            Margin="12,0,0,0" VerticalAlignment="Center" FontSize="12"
                            MinWidth="36" TextAlignment="Right"
                            Foreground="{StaticResource TextSecondaryBrush}"/>
-                <ProgressBar x:Name="ProgressBar" Height="8" Minimum="0" Maximum="100" Value="0"
+                <ProgressBar x:Name="ProgressBar" Height="8" Minimum="0" Maximum="100"
+                             Value="{Binding ProgressValue, Mode=OneWay}"
                              Style="{StaticResource RoundedProgressStyle}" VerticalAlignment="Center"/>
             </DockPanel>
         </StackPanel>
@@ -209,7 +236,8 @@
                     <TextBlock Text="{i18n:Loc '日志'}" FontWeight="SemiBold" FontSize="14" Margin="8,0,0,0"/>
                 </StackPanel>
             </GroupBox.Header>
-            <TextBox x:Name="LogBox" Style="{StaticResource LogConsoleStyle}" MinHeight="100"/>
+            <TextBox x:Name="LogBox" Style="{StaticResource LogConsoleStyle}" MinHeight="100"
+                     Text="{Binding LogText, Mode=OneWay}" TextChanged="LogBox_TextChanged"/>
         </GroupBox>
     </Grid>
 </local:BasePage>

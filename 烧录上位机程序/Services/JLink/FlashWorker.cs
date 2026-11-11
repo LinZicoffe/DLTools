@@ -15,10 +15,15 @@ namespace 烧录上位机程序.Services.JLink;
 /// 在 Task.Run 中运行，通过事件通知 UI 线程更新。
 /// 阶段事件只发送语义代码（connect/erase/program/verify/reset/disconnect/cancel），
 /// 显示文案由 UI 层经 I18nService 本地化。
+///
+/// 宿主与会话工厂均可注入（null 回退 Shared / 真实 J-Link 会话），与全仓
+/// “可注入 + Shared 兜底”模式一致，编排逻辑可离线单测。
 /// </summary>
 public partial class FlashWorker : ObservableObject
 {
     private readonly object _gate = new();
+    private readonly BackgroundTaskHost _host;
+    private readonly Func<IJLinkSession> _sessionFactory;
     private CancellationTokenSource? _cts;
     private Task? _currentTask;
 
@@ -41,6 +46,20 @@ public partial class FlashWorker : ObservableObject
 
     #endregion
 
+    #region Construction
+
+    /// <summary>生产构造：注册到全局 Shared 宿主并使用真实 J-Link 会话。</summary>
+    public FlashWorker() : this(host: null, sessionFactory: null) { }
+
+    /// <summary>测试构造：注入宿主与会话工厂；null 回退 Shared / 真实会话。</summary>
+    public FlashWorker(BackgroundTaskHost? host, Func<IJLinkSession>? sessionFactory)
+    {
+        _host = host ?? BackgroundTaskHost.Shared;
+        _sessionFactory = sessionFactory ?? (() => new JLinkSession((level, msg) => FlashLog?.Invoke(level, msg)));
+    }
+
+    #endregion
+
     #region Public Methods
 
     /// <summary>
@@ -54,7 +73,7 @@ public partial class FlashWorker : ObservableObject
             if (_currentTask is { IsCompleted: false }) return false;
             var cancellation = new CancellationTokenSource();
             IsBusy = true;
-            if (!BackgroundTaskHost.Shared.TryStart(BackgroundOperationKind.Flashing, hostToken =>
+            if (!_host.TryStart(BackgroundOperationKind.Flashing, hostToken =>
                 {
                     using var linked = CancellationTokenSource.CreateLinkedTokenSource(hostToken, cancellation.Token);
                     try { RunFlash(p, linked.Token); }
@@ -94,20 +113,13 @@ public partial class FlashWorker : ObservableObject
 
     private void RunFlash(FlashParams p, CancellationToken ct)
     {
-        JLinkBackend? backend = null;
-        DllLoader? loader = null;
+        IJLinkSession? session = null;
         bool success = false;
         string summary = "";
         try
         {
             ct.ThrowIfCancellationRequested();
-            // A failed load affects this attempt only; the next flash can retry after driver installation.
-            loader = new DllLoader();
-            FlashLog?.Invoke("info", $"JLink_x64.dll 版本: {loader.GetDLLVersion()}");
-            backend = new JLinkBackend(loader, (level, msg) =>
-            {
-                FlashLog?.Invoke(level, msg);
-            });
+            session = _sessionFactory();
 
             var probeParams = new ProbeParams
             {
@@ -120,7 +132,7 @@ public partial class FlashWorker : ObservableObject
 
             // Stage: Connect
             FlashStageChanged?.Invoke("connect");
-            backend.Connect(probeParams);
+            session.Connect(probeParams);
             FlashLog?.Invoke("info", string.Format(I18nService.GetString("目标已连接: {0}"), p.DeviceName));
             ct.ThrowIfCancellationRequested();
 
@@ -128,14 +140,14 @@ public partial class FlashWorker : ObservableObject
             if (p.EraseMode == JLinkBackend.EraseModeChip)
             {
                 FlashStageChanged?.Invoke("erase");
-                backend.Erase(JLinkBackend.EraseModeChip);
+                session.Erase(JLinkBackend.EraseModeChip);
                 FlashLog?.Invoke("info", I18nService.GetString("芯片擦除完成"));
             }
             ct.ThrowIfCancellationRequested(); // 整片擦除（不可中断）完成后立即响应取消
 
             // Program
             FlashStageChanged?.Invoke("program");
-            backend.Program(p.FilePath, p.FileFormat, p.BinStartAddr, (current, total) =>
+            session.Program(p.FilePath, p.FileFormat, p.BinStartAddr, (current, total) =>
             {
                 FlashProgress?.Invoke(current, total);
             }, ct);
@@ -144,7 +156,7 @@ public partial class FlashWorker : ObservableObject
             // Verify（必选：写完必须读回比对。DLL 层不报错不代表数据真的落进了 Flash，
             // 缺了这一步就会出现"烧录失败但日志显示成功"）
             FlashStageChanged?.Invoke("verify");
-            backend.Verify(p.FilePath, p.FileFormat, p.BinStartAddr, ct);
+            session.Verify(p.FilePath, p.FileFormat, p.BinStartAddr, ct);
             FlashLog?.Invoke("info", I18nService.GetString("校验通过"));
 
             // Reset
@@ -154,7 +166,7 @@ public partial class FlashWorker : ObservableObject
                 FlashStageChanged?.Invoke("reset");
                 bool halt = p.PostAction == JLinkBackend.PostActionHalt;
                 bool run = p.PostAction == JLinkBackend.PostActionResetRun;
-                backend.Reset(halt, run);
+                session.Reset(halt, run);
             }
 
             // Disconnect
@@ -173,14 +185,15 @@ public partial class FlashWorker : ObservableObject
         finally
         {
             // Cleanup must not replace the original failure or suppress the completion notification.
-            try { backend?.Close(); }
+            try { session?.Close(); }
             catch (Exception ex) { try { LoggerService.Error($"关闭 J-Link 会话失败: {ex.Message}"); } catch { } }
-            try { loader?.Dispose(); }
-            catch (Exception ex) { try { LoggerService.Error($"释放 J-Link DLL 失败: {ex.Message}"); } catch { } }
             finally
             {
                 IsBusy = false;
-                FlashFinished?.Invoke(success, summary);
+                // 完成事件的订阅方异常不得逃逸进宿主任务（faulted task 会让宿主所有权
+                // 一直占到进程结束）；烧录结果已定，异常记日志后吞掉。
+                try { FlashFinished?.Invoke(success, summary); }
+                catch (Exception ex) { try { LoggerService.Error($"烧录完成事件处理器异常: {ex.Message}"); } catch { } }
             }
         }
     }
