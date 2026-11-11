@@ -43,4 +43,58 @@ public class BackgroundTaskHostTests
             await task.WaitAsync(TimeSpan.FromSeconds(5));
         }
     }
+
+    [Fact]
+    public async Task FaultedOperation_ReleasesOwnershipForNextStart()
+    {
+        var host = new BackgroundTaskHost();
+        Assert.True(host.TryStart(BackgroundOperationKind.Flashing,
+            _ => Task.FromException(new InvalidOperationException("boom")), out var first));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => first);
+        // 异常终态同样归还所有权：宿主可立即承接下一类任务
+        Assert.False(host.IsBusy);
+        Assert.Null(host.CurrentKind);
+        Assert.True(host.TryStart(BackgroundOperationKind.Packaging, _ => Task.CompletedTask, out var second));
+        await second;
+    }
+
+    [Fact]
+    public async Task RequestCancellation_DeliversTokenToRunningOperation()
+    {
+        var host = new BackgroundTaskHost();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(host.TryStart(BackgroundOperationKind.DiskCleanup, async token =>
+        {
+            using var registration = token.Register(() => cancelled.TrySetResult());
+            started.SetResult();
+            try { await Task.Delay(Timeout.Infinite, token); }
+            catch (OperationCanceledException) { }
+        }, out var task));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        host.RequestCancellation();
+        await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task CurrentKind_ReportsWhileRunningAndClearsAfterCompletion()
+    {
+        var host = new BackgroundTaskHost();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(host.TryStart(BackgroundOperationKind.IpScanning, async _ =>
+        {
+            started.SetResult();
+            await release.Task;
+        }, out var task));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(BackgroundOperationKind.IpScanning, host.CurrentKind);
+
+        release.SetResult();
+        await task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Null(host.CurrentKind);
+    }
 }
