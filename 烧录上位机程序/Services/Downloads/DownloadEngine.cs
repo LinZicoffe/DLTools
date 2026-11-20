@@ -457,6 +457,8 @@ public sealed class DownloadEngine
         using (var preallocate = new FileStream(DownloadJournal.TempPathFor(finalPath), FileMode.Create,
             FileAccess.Write, FileShare.None))
         {
+            // 顺序硬约束：先标稀疏再 SetLength，否则 NTFS 扩展非稀疏文件会同步零填充
+            if (total >= SparseFile.MinSparseLength) SparseFile.TryMarkSparse(preallocate.SafeFileHandle);
             preallocate.SetLength(total);
         }
         journal = DownloadJournal.Create(finalPath, options.Url, probe.ETag, probe.LastModified,
@@ -492,6 +494,7 @@ public sealed class DownloadEngine
                 if (expectedTotal is null && response.ContentLength is { } inline) expectedTotal = inline;
                 if (expectedTotal is > 0)
                 {
+                    if (expectedTotal.Value >= SparseFile.MinSparseLength) SparseFile.TryMarkSparse(handle);
                     RandomAccess.SetLength(handle, expectedTotal.Value);
                     state.Total = expectedTotal.Value;
                 }
@@ -517,6 +520,7 @@ public sealed class DownloadEngine
             if (expectedTotal is { } expected && written != expected)
                 throw new DownloadTransportException($"文件大小不符：实际 {written} 字节 / 期望 {expected} 字节。");
             RandomAccess.FlushToDisk(handle);
+            if (written >= SparseFile.MinSparseLength) SparseFile.TryClearSparse(handle);
             handle.Dispose(); // 单流同样先释放句柄再校验
             var sha = ExpectedSha256Of(state.Options);
             if (sha.Length > 0)
@@ -546,6 +550,8 @@ public sealed class DownloadEngine
             immediate: true, cancellationToken).ConfigureAwait(false);
         // 先落盘并释放写句柄，校验读才能打开文件（写句柄为独占）。
         RandomAccess.FlushToDisk(handle);
+        // 文件已写满无空洞：清稀疏位，免稀疏碎片拖慢 SHA256 顺序读与后续烧录读取
+        if (total >= SparseFile.MinSparseLength) SparseFile.TryClearSparse(handle);
         handle.Dispose();
         var actualLength = new FileInfo(tempPath).Length;
         if (actualLength != total)
