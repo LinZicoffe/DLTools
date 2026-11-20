@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using Xunit;
@@ -180,6 +181,76 @@ public class DownloadFaultIntegrationTests : IDisposable
             firstRunPeak,
             secondRunPeak = server.PeakDataConcurrent,
             refusedResponses = server.SnapshotLog().Count(entry => entry.Status == 503)
+        });
+    }
+
+    [DownloadIntegrationFact]
+    public async Task RealHttp_SlowConnectionShed_CompletesFasterThanNoShed()
+    {
+        const long MiB = 1024 * 1024;
+        const long KiB = 1024;
+        var data = FaultInjectionServer.GenerateData(16 * MiB);
+        // 初始 4 段（对半劈在首块到达前完成，边界确定）：[0,4MiB)/[4MiB,8MiB)/[8MiB,12MiB)/[12MiB,16MiB)。
+        // 前 4 个数据请求全部限速：4MiB 段 28KiB/s 滴流（首块 ~2.29s，单样本即过 2s 成熟线且留截断裕量；
+        // 放任不管需 ~146s）；[8MiB,12MiB) 段 256KiB/s 跑 16s、其余 128KiB/s 跑 32s——保持全员忙碌，
+        // 无空闲 worker 劈救慢段。seq≥5（shed 重连/劈救请求）不限速。
+        // 阈值裕量：各区间收数均不足 256KiB → 最佳单连接不成立，基准=链路合计/4≈135KiB/s，
+        // 4×滴速=112KiB/s < 基准。2s 节流 journal FlushToDisk 可能连续触发 500ms 磁盘免判，
+        // 并行测试负载下 shed 最迟 ~6s 生效，仍远早于 noShed 的 16s+ 劈救点（16MiB 撑开 A/B 边际）。
+        var profile = new FaultProfile
+        {
+            RateBytesPerSecondByRequest = (seq, start, end) => seq > 4 ? 0
+                : start == 4 * MiB && end == 8 * MiB - 1 ? 28 * KiB
+                : start == 8 * MiB ? 256 * KiB
+                : 128 * KiB
+        };
+
+        async Task<(long ElapsedMs, int ShedCount, string Log)> RunAsync(bool shedEnabled, string folder)
+        {
+            using var server = new FaultInjectionServer(data, profile);
+            using var transport = new DownloadHttpTransport();
+            var destination = Path.Combine(_workspace.Root, folder);
+            Directory.CreateDirectory(destination);
+            var shedCount = 0;
+            var shedTimes = new List<string>();
+            var stopwatch = Stopwatch.StartNew();
+            var result = await new DownloadEngine(transport, shedEnabled: shedEnabled).DownloadAsync(new DownloadOptions
+            {
+                Url = $"{server.BaseUrl}/fw.bin",
+                DestinationDirectory = destination,
+                Connections = 4,
+                ExpectedSha256 = Sha256Of(data)
+            }, update =>
+            {
+                if (update.Message.Contains("慢连接已丢弃"))
+                {
+                    Interlocked.Increment(ref shedCount);
+                    lock (shedTimes) shedTimes.Add($"{stopwatch.ElapsedMilliseconds}:{update.Message}");
+                }
+                return Task.CompletedTask;
+            }, CancellationToken.None);
+            stopwatch.Stop();
+            Assert.True(result.Completed, result.Error);
+            Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+            var log = string.Join("; ", server.SnapshotLog().Select(e =>
+                $"#{e.Seq}[{e.Start / KiB}K-{e.End / KiB}K]{e.Status} {e.BytesSent / KiB}K/{e.ElapsedMs}ms"));
+            string times;
+            lock (shedTimes) times = string.Join(",", shedTimes);
+            return (stopwatch.ElapsedMilliseconds, Volatile.Read(ref shedCount), $"shed@[{times}]ms {log}");
+        }
+
+        var (shedMs, shedCount, shedLog) = await RunAsync(true, "shed");
+        var (noShedMs, noShedCount, noShedLog) = await RunAsync(false, "noshed");
+        Assert.True(shedCount >= 1, "开启 shed 应至少丢弃一次慢连接");
+        Assert.Equal(0, noShedCount);
+        Assert.True(shedMs < noShedMs * 0.7,
+            $"shed 应显著更快：开启 {shedMs}ms vs 关闭 {noShedMs}ms\nshed日志: {shedLog}\nnoShed日志: {noShedLog}");
+        TestEvidence.Save("慢连接shed加速", new
+        {
+            shedElapsedMs = shedMs,
+            noShedElapsedMs = noShedMs,
+            shedCount,
+            ratio = Math.Round((double)shedMs / noShedMs, 3)
         });
     }
 

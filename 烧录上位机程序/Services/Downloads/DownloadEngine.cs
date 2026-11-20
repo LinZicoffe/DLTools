@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO;
 using Microsoft.Win32.SafeHandles;
 using 烧录上位机程序.Models.Downloads;
@@ -37,6 +39,8 @@ public sealed class DownloadEngine
     private readonly int _maxAttempts;
     private readonly Func<TimeSpan, CancellationToken, Task> _retryDelay;
     private readonly Func<long> _clock;
+    private readonly bool _shedEnabled;
+    private readonly TimeSpan _shedCheckInterval;
 
     private RunState? _state;
 
@@ -46,15 +50,21 @@ public sealed class DownloadEngine
         int? maxAttempts = null,
         Func<TimeSpan, CancellationToken, Task>? retryDelay = null,
         Func<long>? clock = null,
-        DownloadHostLimits? hostLimits = null)
+        DownloadHostLimits? hostLimits = null,
+        bool shedEnabled = true,
+        TimeSpan? shedCheckInterval = null)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        if (shedCheckInterval is { } interval && interval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(shedCheckInterval), "shed 检查间隔必须为正。");
         _globalRateLimiter = globalRateLimiter;
         _hostLimits = hostLimits;
         _stallTimeout = stallTimeout ?? DefaultStallTimeout;
         _maxAttempts = maxAttempts ?? DefaultMaxAttemptsPerSegment;
         _retryDelay = retryDelay ?? DefaultRetryDelay;
         _clock = clock ?? DefaultClock;
+        _shedEnabled = shedEnabled;
+        _shedCheckInterval = shedCheckInterval ?? TimeSpan.FromMilliseconds(500);
     }
 
     private static long DefaultClock() => Environment.TickCount64;
@@ -84,6 +94,7 @@ public sealed class DownloadEngine
                 catch (DownloadTransportException error)
                 {
                     lastError = error;
+                    ReportRefusal(candidates[index], error); // failover 出口同样上报（此刻收数已排空，学习器自行忽略）
                     if (isLast) break;
                     await _state.ReportAsync(DownloadTaskState.Connecting, 0, 0, 0,
                         $"节点不可用，切换下一个（{index + 1}/{candidates.Count}）：{error.Message}", immediate: true,
@@ -132,9 +143,10 @@ public sealed class DownloadEngine
                 state.ProbeTtfbMs = Math.Max(0, _clock() - probeStarted); // 抢占宽限期基准 max(2×TTFB,20ms)
                 break;
             }
-            catch (DownloadTransportException error) when (attempt < _maxAttempts && !error.Terminal)
+            catch (DownloadTransportException error) when (!error.Terminal)
             {
-                ReportRefusal(candidateUrl, error);
+                ReportRefusal(candidateUrl, error); // 末次尝试同样上报（F07 遗留补齐）；此刻无人收数则学习器自行忽略
+                if (attempt >= _maxAttempts) throw;
                 var backoff = BackoffFor(attempt, error.RetryAfterSeconds);
                 await state.ReportAsync(DownloadTaskState.Connecting, state.Total, state.Done, 0,
                     $"探测重试（第 {attempt}/{_maxAttempts} 次，{backoff.TotalMilliseconds:0}ms 后）：{error.Message}",
@@ -242,11 +254,17 @@ public sealed class DownloadEngine
                 // worker 退休（F07 遗留接管）：可重试拒绝且收数段数已达已学上限且仍有同伴 → 让位退出
                 bool ShouldRetire() => _hostLimits?.GetCap(candidateUrl) is { } cap
                     && planner.ReceivingCount >= cap && Volatile.Read(ref liveWorkers) > 1;
+                // 慢连接 shed：限速器非空时禁用（限速等待污染"连接慢"归因）
+                var shed = new DownloadShedPolicy(_clock)
+                {
+                    Enabled = _shedEnabled && state.TaskRateLimiter is null && _globalRateLimiter is null
+                };
+                var shedResponses = new ConcurrentDictionary<int, CancellationTokenSource>();
                 try
                 {
                     // 兄弟止损：单段致命失败立即取消其余 worker，避免失败已定后仍空转派活
                     using var failFast = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    await Task.WhenAll(Enumerable.Range(0, workerCount).Select(workerId => Task.Run(async () =>
+                    var workers = Enumerable.Range(0, workerCount).Select(workerId => Task.Run(async () =>
                     {
                         while (!planner.IsComplete)
                         {
@@ -256,8 +274,8 @@ public sealed class DownloadEngine
                             try
                             {
                                 if (!await TransferAssignmentAsync(candidateUrl, journal, planner, workerId,
-                                        assignment.Value, handle, ifRangeValue, ShouldRetire, failFast.Token)
-                                        .ConfigureAwait(false))
+                                        assignment.Value, handle, ifRangeValue, ShouldRetire, shed, shedResponses,
+                                        failFast.Token).ConfigureAwait(false))
                                 {
                                     Interlocked.Decrement(ref liveWorkers);
                                     return; // 退休：段已 Release，会被同伴劈走
@@ -271,7 +289,32 @@ public sealed class DownloadEngine
                                 throw;
                             }
                         }
-                    }, failFast.Token))).ConfigureAwait(false);
+                    }, failFast.Token)).ToArray();
+                    var monitor = shed.Enabled
+                        ? Task.Run(async () =>
+                        {
+                            using var timer = new PeriodicTimer(_shedCheckInterval);
+                            while (await timer.WaitForNextTickAsync(failFast.Token).ConfigureAwait(false))
+                            {
+                                foreach (var victim in shed.SelectVictims(_clock()))
+                                {
+                                    if (!shedResponses.TryGetValue(victim, out var responseCts)) continue;
+                                    try { responseCts.Cancel(); }
+                                    catch (ObjectDisposedException) { /* 响应已收尾释放：shed 落空无害 */ }
+                                }
+                            }
+                        }, failFast.Token)
+                        : Task.CompletedTask;
+                    try
+                    {
+                        await Task.WhenAll(workers).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        failFast.Cancel(); // 成功出口也停监控；失败出口此前已 Cancel，幂等
+                        try { await monitor.ConfigureAwait(false); }
+                        catch (OperationCanceledException) { /* 监控随 failFast 正常退出 */ }
+                    }
                 }
                 catch (Exception error)
                 {
@@ -324,10 +367,13 @@ public sealed class DownloadEngine
     /// <summary>单个 worker 的一次分配传输：带重试/退避的完整收尾。RangeIgnored 与终态错误直接上抛。
     /// 重试预算按"零进度连续失败"计算，进度取 worker 本地跨段累计 commit 字节（换段不清零）。
     /// 可重试失败先 Release 再退避，退避后重新 Assign（可能拿别的段）；返回 false=worker 退休。
+    /// shed 收场判别：仅响应级 CTS 被取消而 failFast 未取消 → 慢连接丢弃，不耗预算零退避立即重 Assign；
+    /// 真取消/暂停/兄弟止损经 failFast 上抛 OCE，绝不吞成 shed。
     /// 接线契约：读→MarkReceiving→Claim→写→Commit（首字节先标记收数，抢占才不会落入 Commit 抛异常窗口）。</summary>
     private async Task<bool> TransferAssignmentAsync(string candidateUrl, DownloadJournal journal,
         DynamicSegmentPlanner planner, int workerId, Assignment assignment, SafeFileHandle handle,
-        string ifRangeValue, Func<bool> shouldRetire, CancellationToken cancellationToken)
+        string ifRangeValue, Func<bool> shouldRetire, DownloadShedPolicy shed,
+        ConcurrentDictionary<int, CancellationTokenSource> shedResponses, CancellationToken cancellationToken)
     {
         const int maxTotalFailures = 1000; // 有进度重置的绝对上限，防病态服务器 1 字节/次拖死任务
         var state = _state!;
@@ -337,15 +383,35 @@ public sealed class DownloadEngine
         var current = assignment;
         for (var attempt = 1; ; attempt++)
         {
+            CancellationTokenSource? responseCts = null;
+            var transferToken = cancellationToken;
+            if (shed.Enabled)
+            {
+                responseCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                shedResponses[workerId] = responseCts;
+                transferToken = responseCts.Token;
+            }
             try
             {
                 await CopyAssignmentAsync(candidateUrl, journal, planner, workerId, current, handle, ifRangeValue,
-                    bytes => workerCommitted += bytes, cancellationToken).ConfigureAwait(false);
+                    bytes => workerCommitted += bytes, shed, transferToken).ConfigureAwait(false);
                 return true;
             }
             catch (RangeIgnoredException)
             {
                 throw;
+            }
+            catch (OperationCanceledException) when (responseCts is { IsCancellationRequested: true }
+                && !cancellationToken.IsCancellationRequested)
+            {
+                planner.Release(workerId, current.SegmentIndex); // 段回收靠 Assign 三级规则，无新调度逻辑
+                await state.ReportAsync(DownloadTaskState.Downloading, state.Total, state.Done, state.ActiveSegments,
+                    "慢连接已丢弃，立即重连…", immediate: true, cancellationToken).ConfigureAwait(false);
+                var next = await AssignOrWaitAsync(planner, workerId, cancellationToken).ConfigureAwait(false);
+                if (next is null) return true;
+                current = next.Value;
+                attempt--; // shed 不消耗重试预算（continue 的 attempt++ 抵消）
+                continue;
             }
             catch (OperationCanceledException)
             {
@@ -371,6 +437,14 @@ public sealed class DownloadEngine
                 var next = await AssignOrWaitAsync(planner, workerId, cancellationToken).ConfigureAwait(false);
                 if (next is null) return true; // 等待期间同伴已全部完成
                 current = next.Value;
+            }
+            finally
+            {
+                if (responseCts is not null)
+                {
+                    shedResponses.TryRemove(workerId, out _);
+                    responseCts.Dispose();
+                }
             }
         }
     }
@@ -398,7 +472,7 @@ public sealed class DownloadEngine
 
     private async Task CopyAssignmentAsync(string candidateUrl, DownloadJournal journal,
         DynamicSegmentPlanner planner, int workerId, Assignment assignment, SafeFileHandle handle,
-        string ifRangeValue, Action<long> onCommitted, CancellationToken cancellationToken)
+        string ifRangeValue, Action<long> onCommitted, DownloadShedPolicy shed, CancellationToken cancellationToken)
     {
         var state = _state!;
         var requestStart = assignment.RequestStart;
@@ -428,8 +502,10 @@ public sealed class DownloadEngine
                     // 顺序：限速 Acquire → 看门狗读 → Claim → 写 → Commit。
                     // 限速等待期段可被劈走，由 Claim 裁决；部分授予先写自有前缀再重连（不浪费已读字节）。
                     var granted = await AcquireBandwidthAsync(want, cancellationToken).ConfigureAwait(false);
+                    var netStarted = Stopwatch.GetTimestamp();
                     var read = await ReadWithWatchdogAsync(response.Content, buffer, granted, cancellationToken)
                         .ConfigureAwait(false);
+                    var netReadMs = (long)Stopwatch.GetElapsedTime(netStarted).TotalMilliseconds;
                     if (read == 0)
                         throw new DownloadTransportException("分段数据提前结束（连接被中断）。");
                     if (!reportedWorking)
@@ -442,13 +518,19 @@ public sealed class DownloadEngine
                     var claim = planner.Claim(workerId, assignment.SegmentIndex, position, read);
                     if (claim.Lost) break; // 段被抢占：丢弃在途响应，回 Assign 重取
                     var writable = Math.Min(read, claim.GrantedBytes);
+                    var diskStarted = Stopwatch.GetTimestamp();
                     await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, writable), position, cancellationToken)
                         .ConfigureAwait(false);
+                    var diskWaitMs = (long)Stopwatch.GetElapsedTime(diskStarted).TotalMilliseconds;
                     planner.Commit(workerId, assignment.SegmentIndex, position, writable);
                     onCommitted(writable);
                     Interlocked.Add(ref state.DoneRaw, writable);
                     position += writable;
+                    // shed 采样：速度只计净读耗时，写盘耗时单独归因（>50ms 触发全体免判窗口）
+                    shed.RecordSample(workerId, writable, netReadMs, diskWaitMs, assignment.RequestEnd - position + 1);
+                    var journalStarted = Stopwatch.GetTimestamp();
                     await state.MaybeSaveJournalAsync(journal, planner, handle, cancellationToken).ConfigureAwait(false);
+                    shed.RecordDiskStall((long)Stopwatch.GetElapsedTime(journalStarted).TotalMilliseconds);
                     await state.ReportAsync(DownloadTaskState.Downloading, state.Total, state.Done,
                         state.ActiveSegments, "", immediate: false, cancellationToken).ConfigureAwait(false);
                     if (claim.GrantedBytes < read) break; // 段尾被劈走：自有前缀已写，剩余重新 Assign 重发
@@ -532,6 +614,7 @@ public sealed class DownloadEngine
         DownloadJournal.DeleteAll(finalPath); // 清掉可能存在的分段续传记录（布局不兼容）
         var tempPath = DownloadJournal.TempPathFor(finalPath);
         var handle = File.OpenHandle(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, FileOptions.Asynchronous);
+        var reportedWorking = false;
         try
         {
             var response = await _transport.SendAsync(
@@ -563,6 +646,12 @@ public sealed class DownloadEngine
                     var read = await ReadWithWatchdogAsync(response.Content, buffer, granted, cancellationToken)
                         .ConfigureAwait(false);
                     if (read == 0) break;
+                    if (!reportedWorking)
+                    {
+                        reportedWorking = true;
+                        Interlocked.Increment(ref state.ReceivingConnectionsRaw);
+                        _hostLimits?.ReportWorking(candidateUrl, state.ReceivingConnections);
+                    }
                     await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, read), written, cancellationToken)
                         .ConfigureAwait(false);
                     written += read;
@@ -588,8 +677,21 @@ public sealed class DownloadEngine
                 $"已保存到：{target}", immediate: true, CancellationToken.None).ConfigureAwait(false);
             return DownloadEngineResult.FromSuccess(target, written, resumed: false);
         }
+        catch (DownloadTransportException error)
+        {
+            // 与分段路径语义对齐：先递减再上报，拒绝观察只计"别的连接正在收数"——
+            // 单流自身断流不得把 cap 学到 1（F07 遗留补齐，F10 审查修正计数口径）
+            if (reportedWorking)
+            {
+                Interlocked.Decrement(ref state.ReceivingConnectionsRaw);
+                reportedWorking = false;
+            }
+            ReportRefusal(candidateUrl, error);
+            throw;
+        }
         finally
         {
+            if (reportedWorking) Interlocked.Decrement(ref state.ReceivingConnectionsRaw);
             handle.Dispose();
         }
     }

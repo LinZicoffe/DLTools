@@ -60,9 +60,11 @@ public class DownloadEngineTests : IDisposable
     }
 
     private static DownloadEngine CreateEngine(IDownloadTransport transport, List<TimeSpan>? delays = null,
-        TimeSpan? stall = null, int maxAttempts = 5, DownloadHostLimits? hostLimits = null) =>
+        TimeSpan? stall = null, int maxAttempts = 5, DownloadHostLimits? hostLimits = null,
+        bool shedEnabled = true, TimeSpan? shedCheckInterval = null) =>
         new(transport, stallTimeout: stall ?? TimeSpan.FromSeconds(30), maxAttempts: maxAttempts,
-            retryDelay: (delay, _) => { delays?.Add(delay); return Task.CompletedTask; }, hostLimits: hostLimits);
+            retryDelay: (delay, _) => { delays?.Add(delay); return Task.CompletedTask; }, hostLimits: hostLimits,
+            shedEnabled: shedEnabled, shedCheckInterval: shedCheckInterval);
 
     [Fact]
     public async Task MultiSegment_CompletesWithContiguousBytesAndCoverage()
@@ -1078,6 +1080,86 @@ public class DownloadEngineTests : IDisposable
         var ranges = server.SnapshotRanges();
         Assert.Contains(ranges, range => range.Start == 0 && range.End == data.Length - 1);
         Assert.Contains(ranges, range => range.Start > 0); // 限速等待期被劈：重叠请求下 Claim 只授予自有字节
+    }
+
+    /// <summary>shed 用例共享夹具：seq1 整文件滴流 ~21KiB/s（慢连接，3s/块，单样本过 2s 成熟线留截断裕量），
+    /// seq2 尾半 ~320KiB/s。数据量须撑到 32MiB：并行测试负载下快连接每秒 5 次写盘可能单次 &gt;50ms，
+    /// 持续刷新磁盘免判窗口把 shed 推迟数十秒——51s 的劈救点熬过负载高峰；shed 成功后空闲 worker
+    /// 立即劈救快段尾部，正常用例时长仍 ~4-11s。链路基准≈170KiB/s &gt; 4×滴速 85KiB/s（2× 裕量）。
+    /// seq≥3 正常流速（shed 重连/劈救请求）。Override 注入的响应不落 Ranges 记录。</summary>
+    private static LoggedSegmentServer ShedScenarioServer(byte[] data)
+    {
+        var seq = 0;
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return new LoggedSegmentServer(data)
+        {
+            Override = request =>
+            {
+                if (request.RangeStart is 0 && request.RangeEnd is 0) return null;
+                var n = Interlocked.Increment(ref seq);
+                if (n > 2) return null;
+                var start = (int)request.RangeStart!.Value;
+                var end = (int)request.RangeEnd!.Value;
+                var pace = n == 1 ? TimeSpan.FromMilliseconds(3000) : TimeSpan.FromMilliseconds(200);
+                return new TransportResponse(206, "application/octet-stream", "\"v1\"", "",
+                    $"bytes {start}-{end}/{data.Length}", end + 1 - start, "", null,
+                    new PacedStream(data[start..(end + 1)], signal, signal, pace));
+            }
+        };
+    }
+
+    [Fact]
+    public async Task Shed_SlowConnectionDropped_ZeroBackoffNoBudgetAndContentCorrect()
+    {
+        var data = TestData(32 * 1024 * 1024);
+        var expectedSha = Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
+        var server = ShedScenarioServer(data);
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+        var delays = new List<TimeSpan>();
+        var shedMessages = 0;
+
+        var result = await CreateEngine(transport, delays).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2,
+            ExpectedSha256 = expectedSha
+        }, update =>
+        {
+            if (update.Message.Contains("慢连接已丢弃")) Interlocked.Increment(ref shedMessages);
+            return Task.CompletedTask;
+        }, CancellationToken.None);
+
+        Assert.True(result.Completed, result.Error);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+        Assert.True(Volatile.Read(ref shedMessages) >= 1, "~21KiB/s 滴流应在成熟后被 shed");
+        Assert.Empty(delays); // shed 零退避、不耗重试预算
+    }
+
+    [Fact]
+    public async Task Shed_TrueCancelBeforeMaturity_ThrowsAndNeverReportsShed()
+    {
+        var data = TestData(32 * 1024 * 1024);
+        var server = ShedScenarioServer(data);
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+        var shedMessages = 0;
+        using var cancellation = new CancellationTokenSource();
+        cancellation.CancelAfter(TimeSpan.FromSeconds(1)); // 早于 shed 成熟线（净读 2s），真取消必须优先
+
+        var download = CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2
+        }, update =>
+        {
+            if (update.Message.Contains("慢连接已丢弃")) Interlocked.Increment(ref shedMessages);
+            return Task.CompletedTask;
+        }, cancellation.Token);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download);
+        Assert.Equal(0, Volatile.Read(ref shedMessages)); // 判别条件失效会把真取消吞成 shed，此断言证伪
+        Assert.True(DownloadJournal.HasJournal(Path.Combine(destination, "fw.bin")));
     }
 
     /// <summary>慢速收数流：首块立即返回并发信号，其后每块间隔 pace；最后一块交付时发完成信号。</summary>

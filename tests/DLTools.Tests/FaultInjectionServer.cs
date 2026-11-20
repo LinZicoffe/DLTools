@@ -22,6 +22,8 @@ internal sealed record FaultProfile
     public int? StallEvery { get; init; }
     public long? RateBytesPerSecond { get; init; }
     public Func<int, bool>? RateSelector { get; init; }
+    /// <summary>按 (数据请求序号, 区间起点, 区间终点) 精确配速（字节/秒，0=不限）；非空时优先于 RateBytesPerSecond。</summary>
+    public Func<int, long, long, long>? RateBytesPerSecondByRequest { get; init; }
     public int? EtagChangeAfterRequest { get; init; }
     public string ETag { get; init; } = "\"v1\"";
     public string LastModified { get; init; } = "";
@@ -219,10 +221,13 @@ internal sealed class FaultInjectionServer : IDisposable
                 && (profile.DropEvery is null || (profile.DropEvery > 0 && seq % profile.DropEvery == 0));
             var stallThis = applyFaults && profile.StallAtBytes is not null
                 && (profile.StallEvery is null || (profile.StallEvery > 0 && seq % profile.StallEvery == 0));
-            var rate = applyFaults && profile.RateBytesPerSecond is { } bytesPerSecond && bytesPerSecond > 0
-                && (profile.RateSelector is null || profile.RateSelector(seq))
-                    ? bytesPerSecond
-                    : 0;
+            var rate = 0L;
+            if (applyFaults)
+            {
+                if (profile.RateBytesPerSecondByRequest is { } byRequest) rate = byRequest(seq, start, end);
+                else if (profile.RateBytesPerSecond is { } bytesPerSecond && bytesPerSecond > 0
+                    && (profile.RateSelector is null || profile.RateSelector(seq))) rate = bytesPerSecond;
+            }
 
             var buffer = new byte[ChunkSize];
             var offset = start;
