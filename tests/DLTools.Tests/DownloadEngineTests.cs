@@ -67,7 +67,7 @@ public class DownloadEngineTests : IDisposable
     [Fact]
     public async Task MultiSegment_CompletesWithContiguousBytesAndCoverage()
     {
-        var data = TestData(3 * 1024 * 1024); // 3 MiB → 2 段（2 MiB + 1 MiB）
+        var data = TestData(3 * 1024 * 1024); // 动态对半劈：段数不固定，断言内容+覆盖
         var server = new LoggedSegmentServer(data);
         var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
         var destination = Path.Combine(_workspace.Root, "out");
@@ -86,7 +86,7 @@ public class DownloadEngineTests : IDisposable
         var saved = await File.ReadAllBytesAsync(result.FilePath!);
         Assert.Equal(data, saved);
         var ranges = server.SnapshotRanges();
-        Assert.Equal(2, ranges.Count); // 2 段各一次完成
+        Assert.True(ranges.Count >= 2, $"动态分段应至少两次请求，实际 {ranges.Count}");
         Assert.Equal(0L, ranges.Min(range => range.Start));
         Assert.Equal(data.Length - 1, ranges.Max(range => range.End));
         Assert.False(File.Exists(DownloadJournal.JournalPathFor(result.FilePath!)));
@@ -305,18 +305,15 @@ public class DownloadEngineTests : IDisposable
     [Fact]
     public async Task Cancel_KeepsJournalForResumeAndSkipsCompletedBytesOnResume()
     {
-        var data = TestData(3 * 1024 * 1024); // 2 段：[0,2MiB) [2MiB,3MiB)
-        var firstRun = true;
-        LoggedSegmentServer BuildServer() => new(data);
+        var data = TestData(3 * 1024 * 1024);
+        // 单 worker 单段 + 精确 2MiB 前缀后阻塞：取消时 Completed 是确定值（动态多 worker 下水位不确定）
         var blockingServer = new LoggedSegmentServer(data)
         {
             Override = request => request.RangeStart is 0 && request.RangeEnd is 0
                 ? null
-                : request.RangeStart >= 2 * 1024 * 1024 && firstRun
-                    ? new TransportResponse(206, "application/octet-stream", "", "",
-                        $"bytes {request.RangeStart}-{request.RangeEnd}/{data.Length}", null, "", null,
-                        new BlockingStream())
-                    : null
+                : new TransportResponse(206, "application/octet-stream", "", "",
+                    $"bytes {request.RangeStart}-{request.RangeEnd}/{data.Length}", null, "", null,
+                    new PrefixThenBlockingStream(data[..(2 * 1024 * 1024)], TimeSpan.FromMilliseconds(100)))
         };
         var transport = new FakeDownloadTransport((request, _) =>
             Task.FromResult(blockingServer.Serve(request)));
@@ -328,7 +325,7 @@ public class DownloadEngineTests : IDisposable
         var engine = CreateEngine(transport);
         var download = engine.DownloadAsync(new DownloadOptions
         {
-            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 1
         }, update =>
         {
             if (update.DownloadedBytes >= 2 * 1024 * 1024) cancellation.Cancel();
@@ -341,9 +338,8 @@ public class DownloadEngineTests : IDisposable
         Assert.NotNull(journal);
         Assert.Equal(2 * 1024 * 1024, journal!.ReadSegments()[0].Completed);
 
-        // 第二次运行：正常服务器，只应请求剩余段
-        firstRun = false;
-        var resumeServer = BuildServer();
+        // 第二次运行：正常服务器，只应请求剩余字节（动态劈分后各请求起点均 ≥ 已完成水位）
+        var resumeServer = new LoggedSegmentServer(data);
         var resumeTransport = new FakeDownloadTransport((request, _) =>
             Task.FromResult(resumeServer.Serve(request)));
         var result = await CreateEngine(resumeTransport).DownloadAsync(new DownloadOptions
@@ -471,18 +467,16 @@ public class DownloadEngineTests : IDisposable
     public async Task LastModifiedOnlyResume_UnchangedServer_ResumesSkippedSegments()
     {
         const string lastModified = "Wed, 01 Jan 2025 00:00:00 GMT";
-        var data = TestData(3 * 1024 * 1024); // 2 段
-        var firstRun = true;
+        var data = TestData(3 * 1024 * 1024);
+        // 单 worker + 精确 2MiB 前缀后阻塞：无 ETag 时 Last-Modified 一致同样允许续传
         var blockingServer = new LoggedSegmentServer(data)
         {
             ETag = "", LastModified = lastModified,
             Override = request => request.RangeStart is 0 && request.RangeEnd is 0
                 ? null
-                : request.RangeStart >= 2 * 1024 * 1024 && firstRun
-                    ? new TransportResponse(206, "application/octet-stream", "", "",
-                        $"bytes {request.RangeStart}-{request.RangeEnd}/{data.Length}", null, "", null,
-                        new BlockingStream())
-                    : null
+                : new TransportResponse(206, "application/octet-stream", "", "",
+                    $"bytes {request.RangeStart}-{request.RangeEnd}/{data.Length}", null, "", null,
+                    new PrefixThenBlockingStream(data[..(2 * 1024 * 1024)], TimeSpan.FromMilliseconds(100)))
         };
         var transport = new FakeDownloadTransport((request, _) =>
             Task.FromResult(blockingServer.Serve(request)));
@@ -492,7 +486,7 @@ public class DownloadEngineTests : IDisposable
         using var cancellation = new CancellationTokenSource();
         var download = CreateEngine(transport).DownloadAsync(new DownloadOptions
         {
-            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 1
         }, update =>
         {
             if (update.DownloadedBytes >= 2 * 1024 * 1024) cancellation.Cancel();
@@ -500,7 +494,6 @@ public class DownloadEngineTests : IDisposable
         }, cancellation.Token);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download);
 
-        firstRun = false;
         var resumeServer = new LoggedSegmentServer(data) { ETag = "", LastModified = lastModified };
         var resumeTransport = new FakeDownloadTransport((request, _) =>
             Task.FromResult(resumeServer.Serve(request)));
@@ -734,25 +727,28 @@ public class DownloadEngineTests : IDisposable
     [Fact]
     public async Task Segments_DownloadInParallelOnDistinctConnections()
     {
-        var data = TestData(3 * 1024 * 1024); // 2 段
+        var data = TestData(3 * 1024 * 1024);
         var firstArrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondArrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dataSeq = 0;
         var server = new LoggedSegmentServer(data)
         {
             Override = request =>
             {
                 if (request.RangeStart is 0 && request.RangeEnd is 0) return null;
-                if (request.RangeStart == 0)
+                // 按请求序号分流（动态调度下抢占/重发请求起点不固定，按 RangeStart==0 分流会死锁）
+                var seq = Interlocked.Increment(ref dataSeq);
+                if (seq == 1)
                 {
                     firstArrived.TrySetResult();
                     secondArrived.Task.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
                 }
-                else
+                else if (seq == 2)
                 {
                     secondArrived.TrySetResult();
                     firstArrived.Task.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
                 }
-                return null; // 两个分段同时在途后才放行：证明并行
+                return null; // 前两个数据请求同时在途后才放行：证明并行
             }
         };
         var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
@@ -770,32 +766,33 @@ public class DownloadEngineTests : IDisposable
     [Fact]
     public async Task Segment429WhileOtherWorkerReceiving_LearnsCapAtPeakWorking()
     {
-        var data = TestData(3 * 1024 * 1024); // 连接数 2 → 2 段：A 收首段期间 B 被拒两次
+        var data = TestData(3 * 1024 * 1024);
         var limits = new DownloadHostLimits();
-        var aReceiving = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var aDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var refusals = 0;
+        var receiving = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var seq = 0;
         var server = new LoggedSegmentServer(data)
         {
             Override = request =>
             {
                 if (request.RangeStart is 0 && request.RangeEnd is 0) return null;
-                if (request.RangeStart == 0)
+                // 动态调度下抢占/重发请求起点不固定，按请求序号分流而非 RangeStart==0
+                var n = Interlocked.Increment(ref seq);
+                if (n == 1)
                 {
-                    // worker A：首块立即给出并持续慢速收数（约 640ms 窗口），保证拒绝发生时有人正在收数
+                    // 首个数据请求：慢速流占住接收计数（约 500ms 窗口），保证拒绝发生时有人正在收数
                     var end = (int)request.RangeEnd!.Value;
                     return new TransportResponse(206, "application/octet-stream", "\"v1\"", "",
-                        $"bytes 0-{end}/{data.Length}", end + 1, "", null,
-                        new PacedStream(data[..(end + 1)], aReceiving, aDone, TimeSpan.FromMilliseconds(20)));
+                        $"bytes {request.RangeStart}-{end}/{data.Length}", end + 1 - (int)request.RangeStart!.Value, "", null,
+                        new PacedStream(data[(int)request.RangeStart!.Value..(end + 1)],
+                            receiving, receiving, TimeSpan.FromMilliseconds(20)));
                 }
-                // worker B：等 A 确实进入收数状态后拒绝两次；第三次等 A 收尾再放行，
-                // 保证全程收数峰值 = 1（否则两人同时收数会正确地把上限上调，断言就失真了）
-                aReceiving.Task.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
-                Thread.Sleep(200); // 覆盖"流信号 → 引擎计数"之间的微秒级间隙
-                if (Interlocked.Increment(ref refusals) <= 2) return FakeDownloadTransport.RateLimited(0);
-                aDone.Task.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
-                Thread.Sleep(200); // 等 A 的收数计数归零
-                return null;
+                if (n <= 4)
+                {
+                    receiving.Task.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                    if (n == 2) Thread.Sleep(200); // 覆盖"流信号 → 引擎计数"之间的微秒级间隙
+                    return FakeDownloadTransport.RateLimited(0);
+                }
+                return null; // 多余 worker 退休后只剩单 worker 顺序拉尾段
             }
         };
         var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
@@ -807,15 +804,16 @@ public class DownloadEngineTests : IDisposable
             Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2
         }, _ => Task.CompletedTask, CancellationToken.None);
 
-        Assert.True(result.Completed);
+        Assert.True(result.Completed, result.Error);
         Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
-        Assert.Equal(1, limits.GetCap("http://8.8.8.8/fw.bin")); // 拒绝时收数峰值 = 1
+        // 接收中连续两次 429 → cap=当时接收峰值 1；第三次拒绝触发多余 worker 退休，不再烧重试预算
+        Assert.Equal(1, limits.GetCap("http://8.8.8.8/fw.bin"));
     }
 
     [Fact]
     public async Task LearnedCap_NextRunOpensAtMostCapWorkers()
     {
-        var data = TestData(9 * 1024 * 1024); // 连接数 8 → 5 段；已学上限 2 → 只应开 2 个 worker
+        var data = TestData(9 * 1024 * 1024); // 已学上限 2 → 动态调度下最多 2 个 worker 在途
         var limits = new DownloadHostLimits();
         limits.ReportRefused("http://8.8.8.8/fw.bin", 2);
         limits.ReportRefused("http://8.8.8.8/fw.bin", 2);
@@ -890,6 +888,196 @@ public class DownloadEngineTests : IDisposable
 
         Assert.True(result.Completed);
         Assert.Equal([TimeSpan.FromSeconds(300)], delays);
+    }
+
+    [Fact]
+    public async Task SlowFirstConnection_IdleWorkerTakesTailHalf()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var firstArrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = new LoggedSegmentServer(data)
+        {
+            Override = request =>
+            {
+                if (request.RangeStart is 0 && request.RangeEnd is 0) return null;
+                // 挂住起点为 0 的请求（整文件或头段）；尾半请求正常放行并落 Ranges 记录
+                if (request.RangeStart != 0) return null;
+                var end = (int)request.RangeEnd!.Value;
+                return new TransportResponse(206, "application/octet-stream", "\"v1\"", "",
+                    $"bytes 0-{end}/{data.Length}", end + 1, "", null,
+                    new GatedStream(data[..(end + 1)], firstArrived, release));
+            }
+        };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        var download = CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        await firstArrived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            var deadline = Environment.TickCount64 + 5000;
+            // 首连接挂住时，空闲 worker 应劈出并请求 [splitAt, total-1] 的尾半
+            while (!server.SnapshotRanges().Any(range => range.Start > 0 && range.End == data.Length - 1))
+            {
+                Assert.True(Environment.TickCount64 < deadline, "空闲 worker 未在 5 秒内劈出尾半请求");
+                await Task.Delay(10);
+            }
+        }
+        finally { release.TrySetResult(); }
+
+        var result = await download;
+        Assert.True(result.Completed, result.Error);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+    }
+
+    [Fact]
+    public async Task SplitDuringStream_ClaimTruncatesAndReassigns_ContentExact()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var dataRequests = 0;
+        var wholeRequested = 0;
+        var server = new LoggedSegmentServer(data);
+        server.Override = request =>
+        {
+            if (request.RangeStart is 0 && request.RangeEnd is 0) return null;
+            Interlocked.Increment(ref dataRequests);
+            if (request.RangeStart != 0) return null;
+            if (request.RangeEnd == data.Length - 1) Interlocked.Exchange(ref wholeRequested, 1);
+            var end = (int)request.RangeEnd!.Value;
+            // 先交付 128KiB 让对端有得劈，再等第二个数据请求（劈出的尾半）出现后才继续：
+            // 注入响应不走 Ranges 记录，等待条件必须用自己的请求计数
+            return new TransportResponse(206, "application/octet-stream", "\"v1\"", "",
+                $"bytes 0-{end}/{data.Length}", end + 1, "", null,
+                new SplitWaitStream(data[..(end + 1)], () => Volatile.Read(ref dataRequests) >= 2));
+        };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        var result = await CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed, result.Error);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!)); // 截断+重发不得产生重叠写
+        Assert.Equal(1, Volatile.Read(ref wholeRequested)); // 首连接确实请求过整个文件
+        // 尾半请求与整文件区间重叠：旧流被 Claim 截断后重发，内容仍逐字节一致
+        Assert.Contains(server.SnapshotRanges(), range => range.Start > 0 && range.End == data.Length - 1);
+    }
+
+    [Fact]
+    public async Task Cancel_JournalFlushOrder_TempPrefixMatchesJournalExactly()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var seq = 0;
+        var server = new LoggedSegmentServer(data)
+        {
+            Override = request =>
+            {
+                if (request.RangeStart is 0 && request.RangeEnd is 0) return null;
+                var start = (int)request.RangeStart!.Value;
+                var end = (int)request.RangeEnd!.Value;
+                if (Interlocked.Increment(ref seq) == 1)
+                    return new TransportResponse(206, "application/octet-stream", "\"v1\"", "",
+                        $"bytes {start}-{end}/{data.Length}", end + 1 - start, "", null,
+                        new PrefixThenBlockingStream(data[start..(start + 1024 * 1024)], TimeSpan.FromMilliseconds(100)));
+                return new TransportResponse(206, "application/octet-stream", "\"v1\"", "",
+                    $"bytes {start}-{end}/{data.Length}", end + 1 - start, "", null,
+                    new BlockingStream());
+            }
+        };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+        var finalPath = Path.Combine(destination, "fw.bin");
+        var url = "http://8.8.8.8/fw.bin";
+
+        using var cancellation = new CancellationTokenSource();
+        var download = CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = url, DestinationDirectory = destination, Connections = 2
+        }, update =>
+        {
+            if (update.DownloadedBytes >= 1024 * 1024) cancellation.Cancel();
+            return Task.CompletedTask;
+        }, cancellation.Token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download);
+
+        // 先 flush 数据再写 journal：取消后 journal 声称的每个已完成前缀必须已在 .dltmp 落盘。
+        // 局限：读断言走同一 OS 缓存，无崩溃注入时无法证伪 flush/save 顺序颠倒；顺序保证另靠代码审查守护。
+        var journal = DownloadJournal.TryOpen(finalPath, url);
+        Assert.NotNull(journal);
+        var segments = journal!.ReadSegments();
+        Assert.Equal(1024 * 1024, segments.Sum(segment => segment.Completed));
+        var temp = await File.ReadAllBytesAsync(DownloadJournal.TempPathFor(finalPath));
+        foreach (var segment in segments.Where(segment => segment.Completed > 0))
+        {
+            var start = (int)segment.Start;
+            var length = (int)segment.Completed;
+            Assert.Equal(data[start..(start + length)], temp[start..(start + length)]);
+        }
+    }
+
+    [Fact]
+    public async Task OldStaticLayoutResume_DoesNotRewriteCompletedPrefix()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+        var finalPath = Path.Combine(destination, "fw.bin");
+        var url = "http://8.8.8.8/fw.bin";
+        // 旧版静态段表：[0,2MiB) 已完成 1MiB + [2MiB,3MiB) 未动
+        DownloadJournal.Create(finalPath, url, "\"v1\"", "", data.Length, "fw.bin", "",
+        [
+            new DownloadSegment(0, 2 * 1024 * 1024 - 1, 1024 * 1024),
+            new DownloadSegment(2 * 1024 * 1024, data.Length - 1, 0)
+        ]);
+        var tempPath = DownloadJournal.TempPathFor(finalPath);
+        await File.WriteAllBytesAsync(tempPath, data[..(1024 * 1024)]);
+        using (var extend = new FileStream(tempPath, FileMode.Open, FileAccess.Write, FileShare.None))
+            extend.SetLength(data.Length);
+
+        var server = new LoggedSegmentServer(data);
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var result = await CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = url, DestinationDirectory = destination, Connections = 2
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed, result.Error);
+        Assert.True(result.Resumed);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+        Assert.All(server.SnapshotRanges(), range => Assert.True(range.Start >= 1024 * 1024,
+            $"续传不应重拉已完成前缀，实际起点 {range.Start}"));
+    }
+
+    [Fact]
+    public async Task RateLimitWait_SplitDuringAcquire_ClaimGrantsOnlyOwnedBytes()
+    {
+        var data = TestData(3 * 1024 * 1024 / 2); // 1.5MiB，限速 1MiB/s → 传输期足够长
+        var server = new LoggedSegmentServer(data);
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        var result = await CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination,
+            Connections = 2, MaxRateKBps = 1024
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed, result.Error);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+        var ranges = server.SnapshotRanges();
+        Assert.Contains(ranges, range => range.Start == 0 && range.End == data.Length - 1);
+        Assert.Contains(ranges, range => range.Start > 0); // 限速等待期被劈：重叠请求下 Claim 只授予自有字节
     }
 
     /// <summary>慢速收数流：首块立即返回并发信号，其后每块间隔 pace；最后一块交付时发完成信号。</summary>
@@ -991,6 +1179,104 @@ public class DownloadEngineTests : IDisposable
         {
             await _gate.Task.WaitAsync(cancellationToken);
             return 0;
+        }
+    }
+
+    /// <summary>先按 pace 逐块交付给定前缀，随后阻塞直到取消：驱动"流式传输中取消"路径。
+    /// pace 取进度节流间隔（100ms）保证每块（含末块）都触发上报，取消经流式回调而非看门狗兜底。</summary>
+    private sealed class PrefixThenBlockingStream(byte[] prefix, TimeSpan pace) : Stream
+    {
+        private int _position;
+        private readonly TaskCompletionSource<int> _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => prefix.Length;
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+        {
+            if (_position < prefix.Length)
+            {
+                if (_position > 0) await Task.Delay(pace, cancellationToken);
+                var count = Math.Min(buffer.Length, prefix.Length - _position);
+                prefix.AsMemory(_position, count).CopyTo(buffer);
+                _position += count;
+                return count;
+            }
+            await _gate.Task.WaitAsync(cancellationToken);
+            return 0;
+        }
+    }
+
+    /// <summary>首次读取先发到达信号并等待放行，之后正常交付：驱动"慢首连接 → 空闲 worker 劈尾半"路径。</summary>
+    private sealed class GatedStream(byte[] data, TaskCompletionSource arrived, TaskCompletionSource release) : Stream
+    {
+        private int _position;
+        private bool _firstRead = true;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => data.Length;
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+        {
+            if (_firstRead)
+            {
+                _firstRead = false;
+                arrived.TrySetResult();
+                await release.Task.WaitAsync(cancellationToken);
+            }
+            if (_position >= data.Length) return 0;
+            var count = Math.Min(buffer.Length, data.Length - _position);
+            data.AsMemory(_position, count).CopyTo(buffer);
+            _position += count;
+            return count;
+        }
+    }
+
+    /// <summary>先交付 128KiB，再轮询等待劈裂发生（5 秒超时）后继续：驱动"流中途被劈 → Claim 截断"路径。</summary>
+    private sealed class SplitWaitStream(byte[] data, Func<bool> splitHappened) : Stream
+    {
+        private int _position;
+        private bool _waited;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => data.Length;
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+        {
+            if (!_waited && _position >= 128 * 1024)
+            {
+                _waited = true;
+                var deadline = Environment.TickCount64 + 5000;
+                while (!splitHappened())
+                {
+                    if (Environment.TickCount64 >= deadline)
+                        throw new TimeoutException("对端 worker 未在 5 秒内触发劈裂");
+                    await Task.Delay(10, cancellationToken);
+                }
+            }
+            if (_position >= data.Length) return 0;
+            var count = Math.Min(buffer.Length, data.Length - _position);
+            data.AsMemory(_position, count).CopyTo(buffer);
+            _position += count;
+            return count;
         }
     }
 

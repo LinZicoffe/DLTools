@@ -116,10 +116,15 @@ public class DownloadJournalTests : IDisposable
     public async Task SaveSegments_IsSerializedAcrossConcurrentWriters()
     {
         var finalPath = Path.Combine(_workspace.Root, "fw.bin");
+        DownloadSegment[] Layout() =>
+        [
+            new DownloadSegment(0, 2499), new DownloadSegment(2500, 4999),
+            new DownloadSegment(5000, 7499), new DownloadSegment(7500, 9999)
+        ];
         var journal = DownloadJournal.Create(finalPath, "https://8.8.8.8/fw.bin", "", "", 10_000, "fw.bin", "",
-            SegmentPlanner.Plan(10_000, 4));
+            Layout());
         var writers = Enumerable.Range(0, 8).Select(i => Task.Run(() => journal.SaveSegments(
-            SegmentPlanner.Plan(10_000, 4).Select((segment, index) => segment with { Completed = i + index }).ToArray())));
+            Layout().Select((segment, index) => segment with { Completed = i + index }).ToArray())));
         await Task.WhenAll(writers);
         WriteTemp(finalPath);
         Assert.True(DownloadJournal.HasJournal(finalPath));

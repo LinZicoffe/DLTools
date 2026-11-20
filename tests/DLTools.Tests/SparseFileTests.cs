@@ -79,7 +79,7 @@ public class SparseFileTests : IDisposable
     [NtfsFact]
     public async Task Engine_LargeSegmentedDownload_TempIsSparseAndFinalIsNot()
     {
-        var data = new byte[6 * 1024 * 1024]; // ≥5MiB 阈值；连接数 2 → 3 段
+        var data = new byte[6 * 1024 * 1024]; // ≥5MiB 阈值；动态对半劈，段数不固定
         new Random(42).NextBytes(data);
         var arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

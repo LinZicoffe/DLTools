@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.IO;
 using Microsoft.Win32.SafeHandles;
 using 烧录上位机程序.Models.Downloads;
@@ -12,7 +11,7 @@ internal sealed class RangeIgnoredException : Exception
     public RangeIgnoredException() : base("服务器忽略 Range 请求。") { }
 }
 
-/// <summary>单任务下载编排：探测 → 分段并发（worker 拉段队列自动均衡）→ 终验 → 原子提交。
+/// <summary>单任务下载编排：探测 → 动态分段并发（Assign 三级调度 + claim/commit 水位）→ 终验 → 原子提交。
 /// 每个下载任务使用独立引擎实例（非重入）。候选地址（镜像）按序 failover，续传进度跨镜像保留。
 /// 取消/失败时排空全部 worker 才返回（IpScan 同款 WhenAll 排空语义），.dltmp + .dltask.json 保留供续传。</summary>
 public sealed class DownloadEngine
@@ -24,8 +23,11 @@ public sealed class DownloadEngine
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(30);
     // Retry-After 单独放宽到 5 分钟：尊重服务器明示的等待要求，但异常头不能把任务挂死
     private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromSeconds(300);
-    private static readonly TimeSpan JournalSaveInterval = TimeSpan.FromSeconds(2);
-    private const long JournalSaveByteInterval = 512 * 1024;
+    private static readonly TimeSpan AssignPollInterval = TimeSpan.FromMilliseconds(10);
+    private static readonly TimeSpan JournalCheckInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan JournalForceSaveInterval = TimeSpan.FromSeconds(30);
+    private const long JournalSaveByteIntervalMin = 1024 * 1024;
+    private const long JournalSaveByteIntervalMax = 64 * 1024 * 1024;
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(100);
 
     private readonly IDownloadTransport _transport;
@@ -124,8 +126,10 @@ public sealed class DownloadEngine
         {
             try
             {
+                var probeStarted = _clock();
                 probe = await RangeProbe.ProbeAsync(_transport, candidateUrl, cancellationToken,
                     state.Options.EnforcePublicHttps).ConfigureAwait(false);
+                state.ProbeTtfbMs = Math.Max(0, _clock() - probeStarted); // 抢占宽限期基准 max(2×TTFB,20ms)
                 break;
             }
             catch (DownloadTransportException error) when (attempt < _maxAttempts && !error.Terminal)
@@ -185,11 +189,11 @@ public sealed class DownloadEngine
             : null;
         var connections = SegmentPlanner.ClampConnections(state.Options.Connections ?? state.DefaultConnections);
 
-        DownloadSegment[] segments;
+        DynamicSegmentPlanner planner;
         var resumed = false;
         if (journal is not null)
         {
-            segments = journal.ReadSegments().ToArray();
+            var segments = journal.ReadSegments().ToArray();
             // 新鲜度校验：双侧有 ETag 则必须相等；否则退回 Last-Modified 比对（任一侧缺失即视为已变更），
             // 防止无验证器的服务器在同长度内容变更后拼出混合版本文件
             var validatorsCompatible = journal.ETag.Length > 0 && probe.ETag.Length > 0
@@ -204,14 +208,19 @@ public sealed class DownloadEngine
                     .ConfigureAwait(false);
                 DownloadJournal.DeleteAll(finalPath);
                 journal = null;
-                segments = StartFresh(finalPath, total, connections, probe, state.Options, out journal);
+                planner = StartFresh(finalPath, total, probe, state.Options, out journal);
             }
-            else resumed = true;
+            else
+            {
+                planner = DynamicSegmentPlanner.Resume(total, segments); // 兼容旧静态段表与任意粒度
+                resumed = true;
+            }
         }
         else
         {
-            segments = StartFresh(finalPath, total, connections, probe, state.Options, out journal);
+            planner = StartFresh(finalPath, total, probe, state.Options, out journal);
         }
+        planner.SetProbeTtfb(state.ProbeTtfbMs);
 
         var handle = File.OpenHandle(DownloadJournal.TempPathFor(finalPath), FileMode.Open, FileAccess.Write,
             FileShare.None, FileOptions.Asynchronous);
@@ -219,29 +228,40 @@ public sealed class DownloadEngine
         var ifRangeValue = probe.ETag.Length > 0 ? probe.ETag : probe.LastModified;
         try
         {
-            Interlocked.Exchange(ref state.DoneRaw, segments.Sum(segment => segment.Completed));
+            Interlocked.Exchange(ref state.DoneRaw, planner.CompletedBytes);
             state.Total = total;
-            var pending = Enumerable.Range(0, segments.Length).Where(i => !segments[i].IsComplete).ToArray();
-            // 已学到的主机上限约束 worker 数（只在启动时生效；运行中不裁撤 worker，F09 动态调度再接管）
+            // 初始 worker 数吸收已学主机上限与 64KiB 粒度下限；运行中由退休机制继续收敛
             var hostCap = _hostLimits?.GetCap(candidateUrl);
-            var workerCount = Math.Min(hostCap is { } cap ? Math.Min(connections, cap) : connections, pending.Length);
-            if (workerCount > 0)
+            var workerCount = (int)Math.Min(Math.Min(connections, hostCap ?? SegmentPlanner.MaxConnections),
+                (total + BufferSize - 1) / BufferSize);
+            if (workerCount > 0 && !planner.IsComplete)
             {
-                var pendingQueue = new ConcurrentQueue<int>(pending); // worker 拉段队列：先完成者取下段，自动负载均衡
                 Exception? firstError = null;
                 var rangeIgnored = 0;
+                var liveWorkers = workerCount;
+                // worker 退休（F07 遗留接管）：可重试拒绝且收数段数已达已学上限且仍有同伴 → 让位退出
+                bool ShouldRetire() => _hostLimits?.GetCap(candidateUrl) is { } cap
+                    && planner.ReceivingCount >= cap && Volatile.Read(ref liveWorkers) > 1;
                 try
                 {
-                    // 兄弟止损：单段致命失败立即取消其余 worker，避免失败已定后仍把剩余队列拉完
+                    // 兄弟止损：单段致命失败立即取消其余 worker，避免失败已定后仍空转派活
                     using var failFast = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    await Task.WhenAll(Enumerable.Range(0, workerCount).Select(_ => Task.Run(async () =>
+                    await Task.WhenAll(Enumerable.Range(0, workerCount).Select(workerId => Task.Run(async () =>
                     {
-                        while (pendingQueue.TryDequeue(out var segmentIndex))
+                        while (!planner.IsComplete)
                         {
+                            var assignment = await AssignOrWaitAsync(planner, workerId, failFast.Token)
+                                .ConfigureAwait(false);
+                            if (assignment is null) break; // 全部完成
                             try
                             {
-                                await TransferSegmentAsync(candidateUrl, journal, segments, segmentIndex, handle,
-                                    ifRangeValue, failFast.Token).ConfigureAwait(false);
+                                if (!await TransferAssignmentAsync(candidateUrl, journal, planner, workerId,
+                                        assignment.Value, handle, ifRangeValue, ShouldRetire, failFast.Token)
+                                        .ConfigureAwait(false))
+                                {
+                                    Interlocked.Decrement(ref liveWorkers);
+                                    return; // 退休：段已 Release，会被同伴劈走
+                                }
                             }
                             catch (Exception error) when (error is not OperationCanceledException)
                             {
@@ -268,7 +288,7 @@ public sealed class DownloadEngine
                 }
             }
 
-            if (segments.Any(segment => !segment.IsComplete))
+            if (!planner.IsComplete)
                 throw new DownloadTransportException("部分分段未完成。");
 
             var verified = await VerifyAndCommitAsync(finalPath, total, handle, journal, cancellationToken).ConfigureAwait(false);
@@ -276,30 +296,52 @@ public sealed class DownloadEngine
         }
         finally
         {
-            handle.Dispose();
-            // 异常/取消出口统一落盘一次最新分段表（提交成功后日志已删除，跳过）。
+            // 异常/取消出口统一落盘一次最新段表（提交成功后日志已删除，跳过）。
+            // 顺序硬约束：Snapshot 先于 FlushToDisk——快照后落盘的字节只会多不会少，方向安全（宁可少报重下）。
             if (File.Exists(DownloadJournal.JournalPathFor(finalPath)))
-                journal?.SaveSegments(segments);
+            {
+                var snapshot = planner.Snapshot();
+                if (!handle.IsClosed) RandomAccess.FlushToDisk(handle);
+                journal?.SaveSegments(snapshot);
+            }
+            handle.Dispose();
         }
     }
 
-    /// <summary>单个 worker 的一个分段传输：带重试/退避的完整收尾。RangeIgnored 与终态错误直接上抛。
-    /// 重试预算按"零进度连续失败"计算：截断但有推进（代理按字节掐断等）时重置预算，避免健康下载被上限误杀。</summary>
-    private async Task TransferSegmentAsync(string candidateUrl, DownloadJournal journal,
-        DownloadSegment[] segments, int segmentIndex, SafeFileHandle handle, string ifRangeValue,
+    /// <summary>派活或短轮询等待：null=全部完成。10ms 轮询成本远低于一次网络往返，Version 供未来条件等待优化。</summary>
+    private static async Task<Assignment?> AssignOrWaitAsync(DynamicSegmentPlanner planner, int workerId,
         CancellationToken cancellationToken)
+    {
+        while (!planner.IsComplete)
+        {
+            var assignment = planner.Assign(workerId);
+            if (assignment is not null) return assignment;
+            await Task.Delay(AssignPollInterval, cancellationToken).ConfigureAwait(false);
+        }
+        return null;
+    }
+
+    /// <summary>单个 worker 的一次分配传输：带重试/退避的完整收尾。RangeIgnored 与终态错误直接上抛。
+    /// 重试预算按"零进度连续失败"计算，进度取 worker 本地跨段累计 commit 字节（换段不清零）。
+    /// 可重试失败先 Release 再退避，退避后重新 Assign（可能拿别的段）；返回 false=worker 退休。
+    /// 接线契约：读→MarkReceiving→Claim→写→Commit（首字节先标记收数，抢占才不会落入 Commit 抛异常窗口）。</summary>
+    private async Task<bool> TransferAssignmentAsync(string candidateUrl, DownloadJournal journal,
+        DynamicSegmentPlanner planner, int workerId, Assignment assignment, SafeFileHandle handle,
+        string ifRangeValue, Func<bool> shouldRetire, CancellationToken cancellationToken)
     {
         const int maxTotalFailures = 1000; // 有进度重置的绝对上限，防病态服务器 1 字节/次拖死任务
         var state = _state!;
-        var progressMark = segments[segmentIndex].Completed;
+        var workerCommitted = 0L;
+        var progressMark = 0L;
         var totalFailures = 0;
+        var current = assignment;
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                await CopySegmentAsync(candidateUrl, journal, segments, segmentIndex, handle, ifRangeValue,
-                    cancellationToken).ConfigureAwait(false);
-                return;
+                await CopyAssignmentAsync(candidateUrl, journal, planner, workerId, current, handle, ifRangeValue,
+                    bytes => workerCommitted += bytes, cancellationToken).ConfigureAwait(false);
+                return true;
             }
             catch (RangeIgnoredException)
             {
@@ -313,18 +355,22 @@ public sealed class DownloadEngine
             {
                 if (error.Terminal) throw;
                 ReportRefusal(candidateUrl, error);
+                planner.Release(workerId, current.SegmentIndex); // 放弃在途数据，段可被同伴领取/劈走
                 totalFailures++;
-                var current = segments[segmentIndex].Completed;
-                var madeProgress = current > progressMark;
-                progressMark = current;
+                var madeProgress = workerCommitted > progressMark;
+                progressMark = workerCommitted;
                 if (madeProgress) attempt = 0; // 有进度：连续零失败计数从头再来
                 else if (attempt >= _maxAttempts || totalFailures >= maxTotalFailures) throw;
+                if (shouldRetire()) return false;
                 var attemptForBackoff = madeProgress ? 1 : attempt;
                 var backoff = BackoffFor(attemptForBackoff, error.RetryAfterSeconds);
                 await state.ReportAsync(DownloadTaskState.Downloading, state.Total, state.Done, state.ActiveSegments,
                     $"分段重试（第 {attemptForBackoff}/{_maxAttempts} 次，{backoff.TotalMilliseconds:0}ms 后）：{error.Message}",
                     immediate: true, cancellationToken).ConfigureAwait(false);
                 await _retryDelay(backoff, cancellationToken).ConfigureAwait(false);
+                var next = await AssignOrWaitAsync(planner, workerId, cancellationToken).ConfigureAwait(false);
+                if (next is null) return true; // 等待期间同伴已全部完成
+                current = next.Value;
             }
         }
     }
@@ -350,15 +396,15 @@ public sealed class DownloadEngine
         return exponential;
     }
 
-    private async Task CopySegmentAsync(string candidateUrl, DownloadJournal journal, DownloadSegment[] segments,
-        int segmentIndex, SafeFileHandle handle, string ifRangeValue, CancellationToken cancellationToken)
+    private async Task CopyAssignmentAsync(string candidateUrl, DownloadJournal journal,
+        DynamicSegmentPlanner planner, int workerId, Assignment assignment, SafeFileHandle handle,
+        string ifRangeValue, Action<long> onCommitted, CancellationToken cancellationToken)
     {
         var state = _state!;
-        var segment = segments[segmentIndex];
-        var requestStart = segment.Start + segment.Completed;
+        var requestStart = assignment.RequestStart;
         var ifRange = string.IsNullOrEmpty(ifRangeValue) ? null : ifRangeValue;
         var response = await _transport.SendAsync(
-            new TransportRequest(candidateUrl, requestStart, segment.End, ifRange, state.Options.EnforcePublicHttps),
+            new TransportRequest(candidateUrl, requestStart, assignment.RequestEnd, ifRange, state.Options.EnforcePublicHttps),
             cancellationToken).ConfigureAwait(false);
         await using (response.ConfigureAwait(false))
         {
@@ -374,12 +420,14 @@ public sealed class DownloadEngine
             try
             {
                 var buffer = new byte[BufferSize];
-                while (segments[segmentIndex].Remaining > 0)
+                var position = requestStart;
+                while (position <= assignment.RequestEnd)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    segment = segments[segmentIndex];
-                    var granted = await AcquireBandwidthAsync(Math.Min(BufferSize, (int)segment.Remaining),
-                        cancellationToken).ConfigureAwait(false);
+                    var want = (int)Math.Min(BufferSize, assignment.RequestEnd - position + 1);
+                    // 顺序：限速 Acquire → 看门狗读 → Claim → 写 → Commit。
+                    // 限速等待期段可被劈走，由 Claim 裁决；部分授予先写自有前缀再重连（不浪费已读字节）。
+                    var granted = await AcquireBandwidthAsync(want, cancellationToken).ConfigureAwait(false);
                     var read = await ReadWithWatchdogAsync(response.Content, buffer, granted, cancellationToken)
                         .ConfigureAwait(false);
                     if (read == 0)
@@ -389,14 +437,21 @@ public sealed class DownloadEngine
                         reportedWorking = true;
                         Interlocked.Increment(ref state.ReceivingConnectionsRaw);
                         _hostLimits?.ReportWorking(candidateUrl, state.ReceivingConnections);
+                        planner.MarkReceiving(workerId, assignment.SegmentIndex); // 先标记再 Claim：收数段免抢占
                     }
-                    await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, read),
-                        segment.Start + segment.Completed, cancellationToken).ConfigureAwait(false);
-                    segments[segmentIndex] = segment with { Completed = segment.Completed + read };
-                    Interlocked.Add(ref state.DoneRaw, read);
-                    await state.MaybeSaveJournalAsync(journal, segments, cancellationToken).ConfigureAwait(false);
+                    var claim = planner.Claim(workerId, assignment.SegmentIndex, position, read);
+                    if (claim.Lost) break; // 段被抢占：丢弃在途响应，回 Assign 重取
+                    var writable = Math.Min(read, claim.GrantedBytes);
+                    await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, writable), position, cancellationToken)
+                        .ConfigureAwait(false);
+                    planner.Commit(workerId, assignment.SegmentIndex, position, writable);
+                    onCommitted(writable);
+                    Interlocked.Add(ref state.DoneRaw, writable);
+                    position += writable;
+                    await state.MaybeSaveJournalAsync(journal, planner, handle, cancellationToken).ConfigureAwait(false);
                     await state.ReportAsync(DownloadTaskState.Downloading, state.Total, state.Done,
                         state.ActiveSegments, "", immediate: false, cancellationToken).ConfigureAwait(false);
+                    if (claim.GrantedBytes < read) break; // 段尾被劈走：自有前缀已写，剩余重新 Assign 重发
                 }
 
                 // 分段完成属于状态跃迁，绕过节流立即上报（UI 分段计数/暂停判定依赖它）。
@@ -449,11 +504,11 @@ public sealed class DownloadEngine
         return covered == total;
     }
 
-    /// <summary>全新下载的落盘准备：分段规划 → 预分配 .dltmp → 创建续传日志。</summary>
-    private static DownloadSegment[] StartFresh(string finalPath, long total, int connections,
+    /// <summary>全新下载的落盘准备：初始单段规划器 → 预分配 .dltmp → 创建续传日志（段表取 Snapshot）。</summary>
+    private static DynamicSegmentPlanner StartFresh(string finalPath, long total,
         RangeProbeResult probe, DownloadOptions options, out DownloadJournal journal)
     {
-        var segments = SegmentPlanner.Plan(total, connections).ToArray();
+        var planner = new DynamicSegmentPlanner(total);
         using (var preallocate = new FileStream(DownloadJournal.TempPathFor(finalPath), FileMode.Create,
             FileAccess.Write, FileShare.None))
         {
@@ -462,8 +517,8 @@ public sealed class DownloadEngine
             preallocate.SetLength(total);
         }
         journal = DownloadJournal.Create(finalPath, options.Url, probe.ETag, probe.LastModified,
-            total, Path.GetFileName(finalPath), ExpectedSha256Of(options), segments);
-        return segments;
+            total, Path.GetFileName(finalPath), ExpectedSha256Of(options), planner.Snapshot());
+        return planner;
     }
 
     // ---------------------------------------------------------------- 单流路径
@@ -623,6 +678,7 @@ public sealed class DownloadEngine
         private long _lastSpeedSampleBytes;
         private long _journalSaveBytes;
         private long _journalSaveMilliseconds;
+        private long _journalCheckMilliseconds;
         private double _speed;
 
         public RunState(DownloadOptions options, Func<DownloadProgress, Task> sink, Func<long> clock)
@@ -640,6 +696,7 @@ public sealed class DownloadEngine
         public int DefaultConnections { get; }
         public DownloadRateLimiter? TaskRateLimiter { get; }
         public string? DecidedFileName; // 首个候选确定的落盘名，failover 后续候选复用
+        public long ProbeTtfbMs; // 探测往返时延，动态规划器抢占宽限期基准
         public long Total;
         public long DoneRaw;
         public int ActiveSegmentsRaw;
@@ -684,20 +741,27 @@ public sealed class DownloadEngine
             finally { _reportGate.Release(); }
         }
 
-        public async Task MaybeSaveJournalAsync(DownloadJournal journal, DownloadSegment[] segments,
-            CancellationToken cancellationToken)
+        /// <summary>journal 节流落盘：每 2s 检查一次，新增≥Clamp(total/16,1MiB,64MiB) 或距上次真写≥30s 才落盘
+        /// （FlushToDisk 有真实磁盘成本）。顺序硬约束：Snapshot → FlushToDisk → SaveSegments——
+        /// 快照先于 flush，落盘字节只会多不会少，崩溃后宁可少报重下也不许超报 corrupt。</summary>
+        public async Task MaybeSaveJournalAsync(DownloadJournal journal, DynamicSegmentPlanner planner,
+            SafeFileHandle handle, CancellationToken cancellationToken)
         {
             var now = _clock();
-            var done = Done;
-            if (done - Volatile.Read(ref _journalSaveBytes) < JournalSaveByteInterval
-                && now - Volatile.Read(ref _journalSaveMilliseconds) < JournalSaveInterval.TotalMilliseconds) return;
+            if (now - Volatile.Read(ref _journalCheckMilliseconds) < JournalCheckInterval.TotalMilliseconds) return;
             await _journalGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 now = _clock();
-                if (done - _journalSaveBytes < JournalSaveByteInterval
-                    && now - _journalSaveMilliseconds < JournalSaveInterval.TotalMilliseconds) return;
-                journal.SaveSegments(segments);
+                if (now - _journalCheckMilliseconds < JournalCheckInterval.TotalMilliseconds) return;
+                _journalCheckMilliseconds = now;
+                var done = Done;
+                var byteInterval = Math.Clamp(Total / 16, JournalSaveByteIntervalMin, JournalSaveByteIntervalMax);
+                if (done - _journalSaveBytes < byteInterval
+                    && now - _journalSaveMilliseconds < JournalForceSaveInterval.TotalMilliseconds) return;
+                var snapshot = planner.Snapshot();
+                RandomAccess.FlushToDisk(handle);
+                journal.SaveSegments(snapshot);
                 _journalSaveBytes = done;
                 _journalSaveMilliseconds = now;
             }

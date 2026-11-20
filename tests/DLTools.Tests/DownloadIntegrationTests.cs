@@ -82,7 +82,7 @@ public class DownloadIntegrationTests : IDisposable
     public async Task RealHttp_CancelThenNewEngineInstance_ResumesRemainingRangesOnly()
     {
         var data = TestData(5 * 1024 * 1024);
-        var segmentSize = 2 * 1024 * 1024; // Plan(5MiB,2) → 3 段（2/2/1 MiB）
+        var segmentSize = 2 * 1024 * 1024; // 取消阈值：首段至少完整交付 2MiB
         using var server = new FaultInjectionServer(data, new FaultProfile
         {
             // 起点非 0 的分段拖 10 秒：第一轮让 worker B 挂住、worker A 完成首段后被取消
@@ -114,7 +114,8 @@ public class DownloadIntegrationTests : IDisposable
         var journal = DownloadJournal.TryOpen(finalPath, url);
         Assert.NotNull(journal);
         var resumedBytes = journal!.ReadSegments().Sum(segment => segment.Completed);
-        Assert.Equal(segmentSize, resumedBytes); // 首段完整、其余未动
+        // 动态对半劈下段边界不固定：取消时至少完成 2MiB 阈值、且不可能完成全部
+        Assert.InRange(resumedBytes, segmentSize, data.Length - 1);
         var firstRunRangeCount = server.SnapshotRanges().Count;
 
         server.Profile = new FaultProfile(); // 第二轮不再拖慢
