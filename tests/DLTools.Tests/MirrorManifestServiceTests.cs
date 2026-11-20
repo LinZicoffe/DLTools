@@ -1,3 +1,5 @@
+using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using Xunit;
 using 烧录上位机程序.Models.Downloads;
@@ -5,9 +7,11 @@ using 烧录上位机程序.Services.Downloads;
 
 namespace DLTools.Tests;
 
-public class MirrorManifestServiceTests
+public class MirrorManifestServiceTests : IDisposable
 {
     private const string ValidSha = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    private readonly TestWorkspace _workspace = new();
 
     private static MirrorManifestService CreateService(string json, string contentType = "application/json") =>
         new(new FakeDownloadTransport((_, _) => Task.FromResult(
@@ -185,4 +189,48 @@ public class MirrorManifestServiceTests
         Assert.Equal("https://8.8.8.8/alive/fw.bin", ordered[0]);
         Assert.Equal("https://8.8.8.8/halfdead/fw.bin", ordered[^1]); // 超时节点沉底而非中断
     }
+
+    /// <summary>清单链路端到端冒烟：清单 JSON → Fetch 校验 → BuildOptions → 真实引擎 failover → SHA 校验落盘。
+    /// 假传输承载（EnforcePublicHttps=true 拒绝环回，真实公网冒烟属用户手动验收项），
+    /// 逐请求断言 https 公网要求经引擎升级后保持。</summary>
+    [Fact]
+    public async Task MirrorChain_ManifestToEngineFailover_ContentCorrectAndPublicHttpsKept()
+    {
+        // > 单流阈值（1MiB）→ 真正走分段路径的 failover（终审 B1：原 1MiB 恰等于阈值会降级单流）
+        var data = Enumerable.Range(0, 2 * 1024 * 1024).Select(i => (byte)(i * 31 + 7)).ToArray();
+        var sha = Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
+        var json = Manifest($$"""{"name":"fw.bin","size":{{data.Length}},"sha256":"{{sha}}","urls":["https://8.8.8.8/dead/fw.bin","https://8.8.8.8/live/fw.bin"]}""");
+        var live = new FakeSegmentServer(data);
+        var transport = new FakeDownloadTransport((request, _) =>
+        {
+            if (request.Url.EndsWith("manifest.json"))
+                return Task.FromResult(FakeDownloadTransport.OkFull(json.Length, Encoding.UTF8.GetBytes(json), "application/json"));
+            if (request.Url.Contains("dead"))
+            {
+                // 探测可用但分段终态 404 → 引擎 failover 到镜像（与 MirrorFailover 用例同语义）
+                if (request.RangeStart is 0 && request.RangeEnd is 0)
+                    return Task.FromResult(FakeDownloadTransport.Partial(data.Length, 0, 0, [data[0]]));
+                return Task.FromResult(FakeDownloadTransport.Status(404));
+            }
+            return Task.FromResult(live.Serve(request));
+        });
+        var service = new MirrorManifestService(transport);
+        var manifest = await service.FetchAsync("https://8.8.8.8/manifest.json", CancellationToken.None);
+        var entry = Assert.Single(manifest.Files);
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+        var options = service.BuildOptions(entry, destination, connections: 2, orderedUrls: entry.Urls);
+
+        var result = await new DownloadEngine(transport).DownloadAsync(options, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed, result.Error);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+        Assert.Equal("fw.bin", Path.GetFileName(result.FilePath));
+        var requests = transport.SnapshotRequests();
+        Assert.Contains(requests, request => request.Url.Contains("dead"));
+        Assert.Contains(requests, request => request.Url.Contains("live"));
+        Assert.All(requests, request => Assert.True(request.EnforcePublicHttps));
+    }
+
+    public void Dispose() => _workspace.Dispose();
 }

@@ -115,6 +115,55 @@ public class DownloadFaultIntegrationTests : IDisposable
     }
 
     [DownloadIntegrationFact]
+    public async Task RealHttp_CombinedFaults_RefusalTruncationTrickle_Completes()
+    {
+        // F07/F09/F10 协同端到端：限连接 503 退避 + 每第 2 个数据请求掐断 + 每第 3 个滴流。
+        // 滴流只命中部分请求（RateSelector）：收数方多数请求全速，整体快速收尾，
+        // 被拒 worker 在累计 5 次零进度止损前就能经 AssignOrWait 看到完成而退出。
+        var data = FaultInjectionServer.GenerateData(5 * 1024 * 1024);
+        using var server = new FaultInjectionServer(data, new FaultProfile
+        {
+            MaxConcurrent = 2,
+            RetryAfterSeconds = 1,
+            DropAfterBytes = 1024 * 1024,
+            DropEvery = 2,
+            RateBytesPerSecond = 256 * 1024,
+            RateSelector = seq => seq % 3 == 0
+        });
+        using var transport = new DownloadHttpTransport();
+        var shedCount = 0;
+
+        var result = await new DownloadEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = $"{server.BaseUrl}/fw.bin",
+            DestinationDirectory = CreateDestination(),
+            Connections = 4,
+            ExpectedSha256 = Sha256Of(data)
+        }, update =>
+        {
+            if (update.Message.Contains("慢连接已丢弃")) Interlocked.Increment(ref shedCount);
+            return Task.CompletedTask;
+        }, CancellationToken.None);
+
+        Assert.True(result.Completed, result.Error);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+        var log = server.SnapshotLog();
+        Assert.Contains(log, entry => entry.Status == 503);
+        Assert.Contains(log, entry => entry.Status == 206 && entry.BytesSent < entry.End - entry.Start + 1);
+        // 滴流腿真实生效（终审 C2）：配速下 ElapsedMs ≥ BytesSent/速率，128KiB@256KiB/s ≈ 500ms，取 400ms 保守下限
+        var trickled = log.Where(entry => entry.Seq % 3 == 0 && entry.Status == 206 && entry.BytesSent > 0).ToArray();
+        Assert.Contains(trickled, entry => entry.BytesSent >= 128 * 1024 && entry.ElapsedMs >= 400);
+        TestEvidence.Save("组合故障协同", new
+        {
+            refusedResponses = log.Count(entry => entry.Status == 503),
+            truncatedResponses = log.Count(entry => entry.Status == 206 && entry.BytesSent < entry.End - entry.Start + 1),
+            trickledResponses = trickled.Length,
+            shedCount, // F10 参与可观测（终审 A2）：本场景滴流占比低，shed 可能为 0，不硬断言
+            dataRequests = server.DataRequests
+        });
+    }
+
+    [DownloadIntegrationFact]
     public async Task RealHttp_EtagChangedMidDownload_FallsBackToSingleStreamWithCorrectContent()
     {
         var data = FaultInjectionServer.GenerateData(5 * 1024 * 1024);

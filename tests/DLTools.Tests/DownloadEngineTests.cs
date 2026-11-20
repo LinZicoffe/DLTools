@@ -813,6 +813,35 @@ public class DownloadEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task SingleStreamMidReadFault_TwiceOnSameHost_NeverLearnsCapFromSelf()
+    {
+        // F10 审查修正回归：单流断流先递减再上报——垂死的自己不算"有人收数"，
+        // 同主机连续两次单流失败不得学到 cap=1 钳制后续分段下载
+        var data = TestData(64 * 1024); // ≤ 单流阈值 → 走单流路径
+        var limits = new DownloadHostLimits();
+        var transport = new FakeDownloadTransport((request, _) =>
+        {
+            if (request.RangeStart is 0 && request.RangeEnd is 0)
+                return Task.FromResult(FakeDownloadTransport.Partial(data.Length, 0, 0, [data[0]]));
+            return Task.FromResult(new TransportResponse(200, "application/octet-stream", "\"v1\"", "",
+                null, data.Length, "", null, new PrefixThenFaultStream(data[..1024])));
+        });
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        for (var run = 0; run < 2; run++)
+        {
+            var result = await CreateEngine(transport, hostLimits: limits).DownloadAsync(new DownloadOptions
+            {
+                Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination
+            }, _ => Task.CompletedTask, CancellationToken.None);
+            Assert.False(result.Completed);
+        }
+
+        Assert.Null(limits.GetCap("http://8.8.8.8/fw.bin"));
+    }
+
+    [Fact]
     public async Task LearnedCap_NextRunOpensAtMostCapWorkers()
     {
         var data = TestData(9 * 1024 * 1024); // 已学上限 2 → 动态调度下最多 2 个 worker 在途
@@ -1292,6 +1321,31 @@ public class DownloadEngineTests : IDisposable
             }
             await _gate.Task.WaitAsync(cancellationToken);
             return 0;
+        }
+    }
+
+    /// <summary>先交付前缀再抛连接级故障：驱动"单流中途断流 → 先递减再上报"路径。</summary>
+    private sealed class PrefixThenFaultStream(byte[] prefix) : Stream
+    {
+        private int _position;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => prefix.Length;
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+        {
+            if (_position >= prefix.Length)
+                throw new DownloadTransportException("连接中断", connectionFault: true);
+            var count = Math.Min(buffer.Length, prefix.Length - _position);
+            prefix.AsMemory(_position, count).CopyTo(buffer);
+            _position += count;
+            return ValueTask.FromResult(count);
         }
     }
 
