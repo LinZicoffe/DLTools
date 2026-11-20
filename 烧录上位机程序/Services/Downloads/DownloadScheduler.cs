@@ -43,6 +43,7 @@ public sealed class DownloadScheduler
     private int _maxConcurrentTasks = 3;
     private DownloadSettings _currentSettings = new();
     private DownloadRateLimiter? _globalRateLimiter;
+    private readonly DownloadHostLimits _hostLimits = new();
 
     /// <summary>任务状态/进度变化（含新增与移除后的列表变化用 TasksChanged）。</summary>
     public event Action<DownloadTask>? TaskChanged;
@@ -54,7 +55,8 @@ public sealed class DownloadScheduler
         _maxConcurrentTasks = Math.Clamp(maxConcurrentTasks, 1, 8);
     }
 
-    /// <summary>默认引擎工厂：新任务按当前设置建传输，并挂接全局限速器（UpdateSettings 后对新任务生效）。</summary>
+    /// <summary>默认引擎工厂：新任务按当前设置建传输，并挂接全局限速器与主机连接上限
+    /// （UpdateSettings 后限速对新任务生效；主机上限跨任务/跨引擎实例共享学习）。</summary>
     private DownloadEngine CreateDefaultEngine()
     {
         DownloadSettings settings;
@@ -64,7 +66,7 @@ public sealed class DownloadScheduler
             settings = _currentSettings;
             limiter = _globalRateLimiter;
         }
-        return new DownloadEngine(new DownloadHttpTransport(settings), limiter);
+        return new DownloadEngine(new DownloadHttpTransport(settings), limiter, hostLimits: _hostLimits);
     }
 
     /// <summary>当前全局限速器（MaxRateKB&gt;0 时非空）；测试用于断言设置接线。</summary>
@@ -72,6 +74,9 @@ public sealed class DownloadScheduler
     {
         get { lock (_gate) return _globalRateLimiter; }
     }
+
+    /// <summary>本调度器共享的主机连接上限学习器；测试用于断言默认工厂接线与学习结果。</summary>
+    public DownloadHostLimits HostLimits => _hostLimits;
 
     public int MaxConcurrentTasks
     {

@@ -22,12 +22,15 @@ public sealed class DownloadEngine
     public const int BufferSize = 64 * 1024;
     private static readonly TimeSpan InitialBackoff = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(30);
+    // Retry-After 单独放宽到 5 分钟：尊重服务器明示的等待要求，但异常头不能把任务挂死
+    private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromSeconds(300);
     private static readonly TimeSpan JournalSaveInterval = TimeSpan.FromSeconds(2);
     private const long JournalSaveByteInterval = 512 * 1024;
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(100);
 
     private readonly IDownloadTransport _transport;
     private readonly DownloadRateLimiter? _globalRateLimiter;
+    private readonly DownloadHostLimits? _hostLimits;
     private readonly TimeSpan _stallTimeout;
     private readonly int _maxAttempts;
     private readonly Func<TimeSpan, CancellationToken, Task> _retryDelay;
@@ -40,10 +43,12 @@ public sealed class DownloadEngine
         TimeSpan? stallTimeout = null,
         int? maxAttempts = null,
         Func<TimeSpan, CancellationToken, Task>? retryDelay = null,
-        Func<long>? clock = null)
+        Func<long>? clock = null,
+        DownloadHostLimits? hostLimits = null)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _globalRateLimiter = globalRateLimiter;
+        _hostLimits = hostLimits;
         _stallTimeout = stallTimeout ?? DefaultStallTimeout;
         _maxAttempts = maxAttempts ?? DefaultMaxAttemptsPerSegment;
         _retryDelay = retryDelay ?? DefaultRetryDelay;
@@ -125,6 +130,7 @@ public sealed class DownloadEngine
             }
             catch (DownloadTransportException error) when (attempt < _maxAttempts && !error.Terminal)
             {
+                ReportRefusal(candidateUrl, error);
                 var backoff = BackoffFor(attempt, error.RetryAfterSeconds);
                 await state.ReportAsync(DownloadTaskState.Connecting, state.Total, state.Done, 0,
                     $"探测重试（第 {attempt}/{_maxAttempts} 次，{backoff.TotalMilliseconds:0}ms 后）：{error.Message}",
@@ -216,8 +222,9 @@ public sealed class DownloadEngine
             Interlocked.Exchange(ref state.DoneRaw, segments.Sum(segment => segment.Completed));
             state.Total = total;
             var pending = Enumerable.Range(0, segments.Length).Where(i => !segments[i].IsComplete).ToArray();
-            var workerCount = Math.Min(SegmentPlanner.ClampConnections(state.Options.Connections
-                ?? state.DefaultConnections), pending.Length);
+            // 已学到的主机上限约束 worker 数（只在启动时生效；运行中不裁撤 worker，F09 动态调度再接管）
+            var hostCap = _hostLimits?.GetCap(candidateUrl);
+            var workerCount = Math.Min(hostCap is { } cap ? Math.Min(connections, cap) : connections, pending.Length);
             if (workerCount > 0)
             {
                 var pendingQueue = new ConcurrentQueue<int>(pending); // worker 拉段队列：先完成者取下段，自动负载均衡
@@ -305,6 +312,7 @@ public sealed class DownloadEngine
             catch (DownloadTransportException error)
             {
                 if (error.Terminal) throw;
+                ReportRefusal(candidateUrl, error);
                 totalFailures++;
                 var current = segments[segmentIndex].Completed;
                 var madeProgress = current > progressMark;
@@ -321,13 +329,22 @@ public sealed class DownloadEngine
         }
     }
 
+    /// <summary>429/503/连接级故障视为并发拒绝信号上报；终态（403/404）与截断/停滞不是并发限制，不报。
+    /// 此刻无人收数时 HostLimits 自行忽略（整站故障而非连接数限制）。</summary>
+    private void ReportRefusal(string candidateUrl, DownloadTransportException error)
+    {
+        if (_hostLimits is null) return;
+        if (error.StatusCode is 429 or 503 || error.ConnectionFault)
+            _hostLimits.ReportRefused(candidateUrl, _state!.ReceivingConnections);
+    }
+
     private static TimeSpan BackoffFor(int attempt, int? retryAfterSeconds)
     {
         var exponential = TimeSpan.FromMilliseconds(
             Math.Min(MaxBackoff.TotalMilliseconds, InitialBackoff.TotalMilliseconds * Math.Pow(2, attempt - 1)));
         if (retryAfterSeconds is { } seconds)
         {
-            var honoured = TimeSpan.FromSeconds(Math.Min(seconds, MaxBackoff.TotalSeconds));
+            var honoured = TimeSpan.FromSeconds(Math.Min(seconds, MaxRetryAfter.TotalSeconds));
             exponential = honoured > exponential ? honoured : exponential;
         }
         return exponential;
@@ -353,6 +370,7 @@ public sealed class DownloadEngine
                 throw new DownloadTransportException($"分段错位（期望从 {requestStart} 开始，服务器返回 {contentStart}）。");
 
             Interlocked.Increment(ref state.ActiveSegmentsRaw);
+            var reportedWorking = false; // 首次读到数据才算"正在收数"，供主机上限学习区分拒绝与收数
             try
             {
                 var buffer = new byte[BufferSize];
@@ -366,6 +384,12 @@ public sealed class DownloadEngine
                         .ConfigureAwait(false);
                     if (read == 0)
                         throw new DownloadTransportException("分段数据提前结束（连接被中断）。");
+                    if (!reportedWorking)
+                    {
+                        reportedWorking = true;
+                        Interlocked.Increment(ref state.ReceivingConnectionsRaw);
+                        _hostLimits?.ReportWorking(candidateUrl, state.ReceivingConnections);
+                    }
                     await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, read),
                         segment.Start + segment.Completed, cancellationToken).ConfigureAwait(false);
                     segments[segmentIndex] = segment with { Completed = segment.Completed + read };
@@ -381,6 +405,7 @@ public sealed class DownloadEngine
             }
             finally
             {
+                if (reportedWorking) Interlocked.Decrement(ref state.ReceivingConnectionsRaw);
                 Interlocked.Decrement(ref state.ActiveSegmentsRaw);
             }
         }
@@ -612,8 +637,10 @@ public sealed class DownloadEngine
         public long Total;
         public long DoneRaw;
         public int ActiveSegmentsRaw;
+        public int ReceivingConnectionsRaw;
         public long Done => Volatile.Read(ref DoneRaw);
         public int ActiveSegments => Volatile.Read(ref ActiveSegmentsRaw);
+        public int ReceivingConnections => Volatile.Read(ref ReceivingConnectionsRaw);
 
         public async Task ReportAsync(DownloadTaskState state, long total, long done, int activeSegments,
             string message, bool immediate, CancellationToken cancellationToken)

@@ -3,20 +3,24 @@ using System.IO;
 namespace 烧录上位机程序.Services.Downloads;
 
 /// <summary>传输层异常。Terminal=true 表示重试无意义（如 403/404），引擎应直接失败而不是退避重试；
-/// RetryAfterSeconds 携带 429 的 Retry-After 提示，退避时长取其与指数退避的较大值。</summary>
+/// RetryAfterSeconds 携带 429 的 Retry-After 提示，退避时长取其与指数退避的较大值；
+/// ConnectionFault=true 表示连接级故障（建连失败/超时/中途断流），供主机连接上限学习
+/// 区分"并发被拒"与"数据截断/停滞"（后者不是并发限制信号）。</summary>
 public sealed class DownloadTransportException : Exception
 {
     public int? StatusCode { get; }
     public bool Terminal { get; }
     public int? RetryAfterSeconds { get; }
+    public bool ConnectionFault { get; }
 
     public DownloadTransportException(string message, int? statusCode = null, bool terminal = false,
-        int? retryAfterSeconds = null)
+        int? retryAfterSeconds = null, bool connectionFault = false)
         : base(message)
     {
         StatusCode = statusCode;
         Terminal = terminal;
         RetryAfterSeconds = retryAfterSeconds;
+        ConnectionFault = connectionFault;
     }
 }
 

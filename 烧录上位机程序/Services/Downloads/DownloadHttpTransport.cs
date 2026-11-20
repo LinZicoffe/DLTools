@@ -76,11 +76,11 @@ public sealed class DownloadHttpTransport : IDownloadTransport, IDisposable
             }
             catch (HttpRequestException error)
             {
-                throw new DownloadTransportException("连接失败：" + error.Message);
+                throw new DownloadTransportException("连接失败：" + error.Message, connectionFault: true);
             }
             catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                throw new DownloadTransportException("连接超时（10 秒内未建立连接），请检查网络或代理设置。");
+                throw new DownloadTransportException("连接超时（10 秒内未建立连接），请检查网络或代理设置。", connectionFault: true);
             }
 
             if (response.StatusCode is HttpStatusCode.Moved or HttpStatusCode.Found
@@ -120,7 +120,7 @@ public sealed class DownloadHttpTransport : IDownloadTransport, IDisposable
             catch (Exception error) when (error is not OperationCanceledException)
             {
                 response.Dispose(); // 读内容失败也要释放响应，连接才能及时归还池
-                throw new DownloadTransportException("读取响应内容失败：" + error.Message);
+                throw new DownloadTransportException("读取响应内容失败：" + error.Message, connectionFault: true);
             }
             return new TransportResponse(
                 (int)response.StatusCode,
@@ -212,6 +212,6 @@ public sealed class DownloadHttpTransport : IDownloadTransport, IDisposable
             error is IOException or SocketException or HttpRequestException or ObjectDisposedException;
 
         private static DownloadTransportException MapFault(Exception error) =>
-            new("连接中断：" + error.Message);
+            new("连接中断：" + error.Message, connectionFault: true);
     }
 }

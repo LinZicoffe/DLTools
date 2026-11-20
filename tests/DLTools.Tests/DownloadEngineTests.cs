@@ -60,9 +60,9 @@ public class DownloadEngineTests : IDisposable
     }
 
     private static DownloadEngine CreateEngine(IDownloadTransport transport, List<TimeSpan>? delays = null,
-        TimeSpan? stall = null, int maxAttempts = 5) =>
+        TimeSpan? stall = null, int maxAttempts = 5, DownloadHostLimits? hostLimits = null) =>
         new(transport, stallTimeout: stall ?? TimeSpan.FromSeconds(30), maxAttempts: maxAttempts,
-            retryDelay: (delay, _) => { delays?.Add(delay); return Task.CompletedTask; });
+            retryDelay: (delay, _) => { delays?.Add(delay); return Task.CompletedTask; }, hostLimits: hostLimits);
 
     [Fact]
     public async Task MultiSegment_CompletesWithContiguousBytesAndCoverage()
@@ -765,6 +765,188 @@ public class DownloadEngineTests : IDisposable
         }, _ => Task.CompletedTask, CancellationToken.None);
 
         Assert.True(result.Completed); // 死锁（串行）会让 5 秒门闩超时抛异常
+    }
+
+    [Fact]
+    public async Task Segment429WhileOtherWorkerReceiving_LearnsCapAtPeakWorking()
+    {
+        var data = TestData(3 * 1024 * 1024); // 连接数 2 → 2 段：A 收首段期间 B 被拒两次
+        var limits = new DownloadHostLimits();
+        var aReceiving = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var aDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var refusals = 0;
+        var server = new LoggedSegmentServer(data)
+        {
+            Override = request =>
+            {
+                if (request.RangeStart is 0 && request.RangeEnd is 0) return null;
+                if (request.RangeStart == 0)
+                {
+                    // worker A：首块立即给出并持续慢速收数（约 640ms 窗口），保证拒绝发生时有人正在收数
+                    var end = (int)request.RangeEnd!.Value;
+                    return new TransportResponse(206, "application/octet-stream", "\"v1\"", "",
+                        $"bytes 0-{end}/{data.Length}", end + 1, "", null,
+                        new PacedStream(data[..(end + 1)], aReceiving, aDone, TimeSpan.FromMilliseconds(20)));
+                }
+                // worker B：等 A 确实进入收数状态后拒绝两次；第三次等 A 收尾再放行，
+                // 保证全程收数峰值 = 1（否则两人同时收数会正确地把上限上调，断言就失真了）
+                aReceiving.Task.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                Thread.Sleep(200); // 覆盖"流信号 → 引擎计数"之间的微秒级间隙
+                if (Interlocked.Increment(ref refusals) <= 2) return FakeDownloadTransport.RateLimited(0);
+                aDone.Task.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                Thread.Sleep(200); // 等 A 的收数计数归零
+                return null;
+            }
+        };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        var result = await CreateEngine(transport, hostLimits: limits).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+        Assert.Equal(1, limits.GetCap("http://8.8.8.8/fw.bin")); // 拒绝时收数峰值 = 1
+    }
+
+    [Fact]
+    public async Task LearnedCap_NextRunOpensAtMostCapWorkers()
+    {
+        var data = TestData(9 * 1024 * 1024); // 连接数 8 → 5 段；已学上限 2 → 只应开 2 个 worker
+        var limits = new DownloadHostLimits();
+        limits.ReportRefused("http://8.8.8.8/fw.bin", 2);
+        limits.ReportRefused("http://8.8.8.8/fw.bin", 2);
+        var inFlight = 0;
+        var peak = 0;
+        var arrived = 0;
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = new LoggedSegmentServer(data)
+        {
+            Override = request =>
+            {
+                if (request.RangeStart is 0 && request.RangeEnd is 0) return null;
+                var current = Interlocked.Increment(ref inFlight);
+                int seen;
+                while ((seen = Volatile.Read(ref peak)) < current)
+                    Interlocked.CompareExchange(ref peak, current, seen);
+                var order = Interlocked.Increment(ref arrived);
+                if (order == 1)
+                {
+                    first.TrySetResult();
+                    second.Task.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                }
+                else if (order == 2)
+                {
+                    second.TrySetResult();
+                    first.Task.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                }
+                var start = (int)request.RangeStart!.Value;
+                var end = (int)request.RangeEnd!.Value;
+                var body = data[start..(end + 1)];
+                return new TransportResponse(206, "application/octet-stream", "\"v1\"", "",
+                    $"bytes {start}-{end}/{data.Length}", body.Length, "", null,
+                    new DisposalCallbackStream(new MemoryStream(body), () => Interlocked.Decrement(ref inFlight)));
+            }
+        };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        var result = await CreateEngine(transport, hostLimits: limits).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 8
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+        Assert.Equal(2, Volatile.Read(ref peak)); // 前两段 rendezvous 保证 ≥2；上限约束保证 ≤2
+    }
+
+    [Fact]
+    public async Task Probe429_RetryAfterBeyondFiveMinutes_IsCappedAt300Seconds()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var probeFailures = 0;
+        var server = new LoggedSegmentServer(data)
+        {
+            Override = request => request.RangeStart is 0 && request.RangeEnd is 0
+                                  && Interlocked.Increment(ref probeFailures) == 1
+                ? FakeDownloadTransport.RateLimited(600) // 异常长的 Retry-After：不能把任务挂死
+                : null
+        };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+        var delays = new List<TimeSpan>();
+
+        var result = await CreateEngine(transport, delays).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.Equal([TimeSpan.FromSeconds(300)], delays);
+    }
+
+    /// <summary>慢速收数流：首块立即返回并发信号，其后每块间隔 pace；最后一块交付时发完成信号。</summary>
+    private sealed class PacedStream(byte[] data, TaskCompletionSource receivingSignal,
+        TaskCompletionSource completionSignal, TimeSpan pace) : Stream
+    {
+        private int _position;
+        private bool _firstRead = true;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => data.Length;
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+        {
+            if (_position >= data.Length) return 0;
+            if (!_firstRead) await Task.Delay(pace, cancellationToken);
+            _firstRead = false;
+            var count = Math.Min(buffer.Length, data.Length - _position);
+            data.AsMemory(_position, count).CopyTo(buffer);
+            _position += count;
+            receivingSignal.TrySetResult();
+            if (_position == data.Length) completionSignal.TrySetResult();
+            return count;
+        }
+    }
+
+    /// <summary>释放时回调的流包装：用于统计在途响应数（响应流释放 = 该连接收尾）。</summary>
+    private sealed class DisposalCallbackStream(Stream inner, Action onDisposed) : Stream
+    {
+        public override bool CanRead => inner.CanRead;
+        public override bool CanSeek => inner.CanSeek;
+        public override bool CanWrite => inner.CanWrite;
+        public override long Length => inner.Length;
+        public override long Position { get => inner.Position; set => inner.Position = value; }
+        public override void Flush() => inner.Flush();
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+        public override void SetLength(long value) => inner.SetLength(value);
+        public override void Write(byte[] buffer, int offset, int count) => inner.Write(buffer, offset, count);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            inner.ReadAsync(buffer, cancellationToken);
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                inner.Dispose();
+                onDisposed();
+            }
+            base.Dispose(disposing);
+        }
+        // 不重写 DisposeAsync：Stream 基类会路由到 Dispose(true)，重写会导致回调触发两次
     }
 
     /// <summary>读操作永不返回数据的流：驱动看门狗与取消路径。</summary>

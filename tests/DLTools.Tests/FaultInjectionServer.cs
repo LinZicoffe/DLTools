@@ -53,6 +53,7 @@ internal sealed class FaultInjectionServer : IDisposable
     private int _requests;
     private int _dataRequests;
     private int _peakConcurrent;
+    private int _peakDataInFlight;
     private int _disposed;
 
     public FaultInjectionServer(byte[] data, FaultProfile? profile = null)
@@ -104,6 +105,11 @@ internal sealed class FaultInjectionServer : IDisposable
     public int DataRequests => Volatile.Read(ref _dataRequests);
     public int PeakConcurrent { get { lock (_gate) return _peakConcurrent; } }
 
+    /// <summary>数据请求（不含探测）的在途并发峰值；ResetPeakDataConcurrent 用于分轮断言。</summary>
+    public int PeakDataConcurrent => Volatile.Read(ref _peakDataInFlight);
+
+    public void ResetPeakDataConcurrent() => Interlocked.Exchange(ref _peakDataInFlight, 0);
+
     /// <summary>确定性负载填充（非加密用途；仅保证用例可复现、SHA-256 可断言）。</summary>
     public static byte[] GenerateData(long size, byte seed = 99)
     {
@@ -148,7 +154,10 @@ internal sealed class FaultInjectionServer : IDisposable
         {
             if (!isProbe)
             {
-                Interlocked.Increment(ref _dataInFlight);
+                var dataPeak = Interlocked.Increment(ref _dataInFlight);
+                int seen;
+                while ((seen = Volatile.Read(ref _peakDataInFlight)) < dataPeak)
+                    Interlocked.CompareExchange(ref _peakDataInFlight, dataPeak, seen);
                 countedAsData = true;
             }
 
