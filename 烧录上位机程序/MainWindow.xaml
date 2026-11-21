@@ -61,52 +61,75 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             <Border BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="0,0,1,0">
-                <StackPanel Margin="12,16">
-                    <Button Content="固件烧录" Command="{Binding ShowFlashCommand}"
-                            Height="44" Margin="0,0,0,10">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
-                                <Style.Triggers><DataTrigger Binding="{Binding IsFlashSelected}" Value="True"><Setter Property="Background" Value="#E8F1FB"/><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                    <Button Content="项目打包" Command="{Binding ShowPackagingCommand}"
-                            Height="44" Margin="0,0,0,10">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
-                                <Style.Triggers><DataTrigger Binding="{Binding IsPackagingSelected}" Value="True"><Setter Property="Background" Value="#E8F1FB"/><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                    <Button Content="离线授权" Command="{Binding ShowAuthorizationCommand}" Height="44" Margin="0,0,0,10">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
-                                <Style.Triggers><DataTrigger Binding="{Binding IsAuthorizationSelected}" Value="True"><Setter Property="Background" Value="#E8F1FB"/><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                    <Button Content="IP 扫描" Command="{Binding ShowIpScanCommand}" Height="44" Margin="0,0,0,10">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
-                                <Style.Triggers><DataTrigger Binding="{Binding IsIpScanSelected}" Value="True"><Setter Property="Background" Value="#E8F1FB"/><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                    <Button Content="高速下载" Command="{Binding ShowDownloadCommand}" Height="44" Margin="0,0,0,10">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
-                                <Style.Triggers><DataTrigger Binding="{Binding IsDownloadSelected}" Value="True"><Setter Property="Background" Value="#E8F1FB"/><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                    <Button Content="C盘清理" Command="{Binding ShowCleanupCommand}" Height="44">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
-                                <Style.Triggers><DataTrigger Binding="{Binding IsCleanupSelected}" Value="True"><Setter Property="Background" Value="#E8F1FB"/><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                </StackPanel>
+                <!-- StackPanel 与胶囊 Canvas 共用同一 Margin（坐标原点一致），胶囊按
+                     按钮在 StackPanel 内的位置无级定位，选中态视觉由胶囊层承担 -->
+                <Grid x:Name="NavHostGrid" Margin="12,16">
+                    <StackPanel x:Name="NavItemsHost">
+                        <Button Content="固件烧录" Command="{Binding ShowFlashCommand}"
+                                Height="44" Margin="0,0,0,10">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource NavButtonStyle}">
+                                    <Style.Triggers><DataTrigger Binding="{Binding IsFlashSelected}" Value="True"><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="FontWeight" Value="Bold"/></DataTrigger></Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="项目打包" Command="{Binding ShowPackagingCommand}"
+                                Height="44" Margin="0,0,0,10">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource NavButtonStyle}">
+                                    <Style.Triggers><DataTrigger Binding="{Binding IsPackagingSelected}" Value="True"><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="FontWeight" Value="Bold"/></DataTrigger></Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="离线授权" Command="{Binding ShowAuthorizationCommand}" Height="44" Margin="0,0,0,10">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource NavButtonStyle}">
+                                    <Style.Triggers><DataTrigger Binding="{Binding IsAuthorizationSelected}" Value="True"><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="FontWeight" Value="Bold"/></DataTrigger></Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="IP 扫描" Command="{Binding ShowIpScanCommand}" Height="44" Margin="0,0,0,10">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource NavButtonStyle}">
+                                    <Style.Triggers><DataTrigger Binding="{Binding IsIpScanSelected}" Value="True"><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="FontWeight" Value="Bold"/></DataTrigger></Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="高速下载" Command="{Binding ShowDownloadCommand}" Height="44" Margin="0,0,0,10">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource NavButtonStyle}">
+                                    <Style.Triggers><DataTrigger Binding="{Binding IsDownloadSelected}" Value="True"><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="FontWeight" Value="Bold"/></DataTrigger></Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="C盘清理" Command="{Binding ShowCleanupCommand}" Height="44">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource NavButtonStyle}">
+                                    <Style.Triggers><DataTrigger Binding="{Binding IsCleanupSelected}" Value="True"><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="FontWeight" Value="Bold"/></DataTrigger></Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                    </StackPanel>
+                    <!-- 液态玻璃选中胶囊：纯视觉层，不参与命中测试；宽度与位置由
+                         MainWindow.xaml.cs 按选中按钮实时校正，动画见 PositionNavCapsule -->
+                    <Canvas x:Name="NavCapsuleLayer" IsHitTestVisible="False">
+                        <Border x:Name="NavCapsule" Canvas.Left="0" Canvas.Top="0"
+                                Opacity="0"
+                                Style="{StaticResource NavCapsuleStyle}"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform>
+                                <TransformGroup>
+                                    <TranslateTransform x:Name="NavCapsuleTranslate"/>
+                                    <ScaleTransform x:Name="NavCapsuleScale"/>
+                                </TransformGroup>
+                            </Border.RenderTransform>
+                            <!-- 顶部白色→透明内反光 -->
+                            <Border Height="13" Margin="12,3,12,0" VerticalAlignment="Top"
+                                    CornerRadius="21"
+                                    Background="{DynamicResource NavCapsuleHighlightBrush}"/>
+                        </Border>
+                    </Canvas>
+                </Grid>
             </Border>
             <!-- 保持有界测量，让页面日志区的 * 行可用。页面实例由 ViewModel 缓存。 -->
             <Frame Grid.Column="1" Content="{Binding CurrentPage}" NavigationUIVisibility="Hidden"

@@ -183,6 +183,39 @@
         </Setter>
     </Style>
 
+    <!-- ============ 液态玻璃导航胶囊 ============
+         颜色与投影全部取自下列资源键（胶囊样式与跟随逻辑不写死颜色）：
+         将来接入深色主题时整键替换这些键值，胶囊即可经 DynamicResource 即时换肤 -->
+    <!-- Accent #0F6CBD @ 18% 不透明度 -->
+    <SolidColorBrush x:Key="NavCapsuleBackgroundBrush" Color="#2E0F6CBD"/>
+    <!-- 白 @ 40% 描边 -->
+    <SolidColorBrush x:Key="NavCapsuleBorderBrush" Color="#66FFFFFF"/>
+    <!-- 顶部 13% 白 → 透明 内反光渐变 -->
+    <LinearGradientBrush x:Key="NavCapsuleHighlightBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#21FFFFFF" Offset="0"/>
+        <GradientStop Color="#00FFFFFF" Offset="1"/>
+    </LinearGradientBrush>
+    <!-- Accent 色柔光投影 -->
+    <DropShadowEffect x:Key="NavCapsuleGlowEffect" BlurRadius="16" ShadowDepth="2"
+                      Direction="270" Opacity="0.35" Color="#0F6CBD"/>
+
+    <Style x:Key="NavCapsuleStyle" TargetType="Border">
+        <Setter Property="Height" Value="44"/>
+        <Setter Property="CornerRadius" Value="22"/>
+        <Setter Property="Background" Value="{DynamicResource NavCapsuleBackgroundBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource NavCapsuleBorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Effect" Value="{DynamicResource NavCapsuleGlowEffect}"/>
+    </Style>
+
+    <!-- 侧栏导航按钮：未选中透明底（选中指示由胶囊层承担），悬停/按压沿用
+         SecondaryButtonStyle 模板里的 #F5F5F5 / #ECECEC 填充 -->
+    <Style x:Key="NavButtonStyle" TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+    </Style>
+
     <!-- ============ 日志控制台（暗色，独立模板避免被主题样式改回浅色） ============ -->
     <Style x:Key="LogConsoleStyle" TargetType="TextBox">
         <Setter Property="Background" Value="{StaticResource LogBgBrush}"/>

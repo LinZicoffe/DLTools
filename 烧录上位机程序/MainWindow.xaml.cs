@@ -1,8 +1,12 @@
 ﻿using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
 using Material.Icons;
 using 烧录上位机程序.Services;
+using 烧录上位机程序.ViewModels;
 
 namespace 烧录上位机程序;
 
@@ -14,14 +18,90 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     // 此时再点 X 直接忽略，避免弹第二个确认框与产生分歧的关闭链
     private bool _closingInProgress;
 
+    // ===== 左侧导航液态玻璃选中胶囊（样式见 UiStyles.xaml 的 NavCapsule 系列资源）=====
+    // 顺序与 NavItemsHost 里的导航按钮一一对应，新增导航时两处需同步
+    private readonly Button[] _navButtons;
+    private int _navSelectionIndex;
+    private double _navCapsuleY = double.NaN; // NaN = 尚未定位过，首次必须无动画落位
+
     public MainWindow()
     {
         InitializeComponent();
-        DataContext = new 烧录上位机程序.ViewModels.MainWindowViewModel();
+        DataContext = new MainWindowViewModel();
 
         // 语言切换入口已随标题栏改版移除：文案固定简体中文，
         // 不再读取历史配置，避免被锁定在无法切回的语言
         I18nService.LoadLanguage("zh_CN");
+
+        // 胶囊跟随：ViewModel 切页时六个 IsXxxSelected 一起通知，
+        // 复用该通知驱动胶囊滑动，不改动 ViewModel
+        _navButtons = NavItemsHost.Children.OfType<Button>().ToArray();
+        if (DataContext is INotifyPropertyChanged notifier)
+            notifier.PropertyChanged += NavSelection_PropertyChanged;
+        Loaded += (_, _) => PositionNavCapsule(animate: false); // 启动直接落位，无飞入
+        SizeChanged += (_, _) => PositionNavCapsule(animate: false); // 尺寸变化无动画校正，避免漂移
+    }
+
+    private void NavSelection_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is not MainWindowViewModel viewModel) return;
+        // 只有变为 true 的那一项代表本次切换的新选中页（其余五项为 false）
+        var index = e.PropertyName switch
+        {
+            nameof(MainWindowViewModel.IsFlashSelected) when viewModel.IsFlashSelected => 0,
+            nameof(MainWindowViewModel.IsPackagingSelected) when viewModel.IsPackagingSelected => 1,
+            nameof(MainWindowViewModel.IsAuthorizationSelected) when viewModel.IsAuthorizationSelected => 2,
+            nameof(MainWindowViewModel.IsIpScanSelected) when viewModel.IsIpScanSelected => 3,
+            nameof(MainWindowViewModel.IsDownloadSelected) when viewModel.IsDownloadSelected => 4,
+            nameof(MainWindowViewModel.IsCleanupSelected) when viewModel.IsCleanupSelected => 5,
+            _ => -1,
+        };
+        if (index < 0) return;
+        _navSelectionIndex = index;
+        if (IsLoaded) PositionNavCapsule(animate: true);
+    }
+
+    /// <summary>把胶囊定位到当前选中导航按钮处。animate=false 用于启动落位
+    /// 与窗口尺寸校正（先停掉在途动画再写属性）；animate=true 播放滑动与拉伸回弹。</summary>
+    private void PositionNavCapsule(bool animate)
+    {
+        if (_navSelectionIndex < 0 || _navSelectionIndex >= _navButtons.Length) return;
+        var button = _navButtons[_navSelectionIndex];
+        if (NavCapsuleLayer.ActualWidth <= 0 || button.ActualHeight <= 0) return;
+
+        NavCapsule.Width = NavCapsuleLayer.ActualWidth; // 宽度跟随导航可用宽度
+        var targetY = button.TransformToAncestor(NavItemsHost).Transform(new Point(0, 0)).Y;
+        NavCapsule.Opacity = 1;
+        if (!animate || double.IsNaN(_navCapsuleY))
+        {
+            NavCapsuleTranslate.BeginAnimation(TranslateTransform.YProperty, null);
+            NavCapsuleScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            NavCapsuleTranslate.Y = targetY;
+            NavCapsuleScale.ScaleY = 1;
+            _navCapsuleY = targetY;
+            return;
+        }
+
+        // 滑动：460ms BackEase(EaseOut, Amplitude=0.45) 到位回弹
+        var slide = new DoubleAnimation(targetY, TimeSpan.FromMilliseconds(460))
+        {
+            EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.45 },
+        };
+        NavCapsuleTranslate.BeginAnimation(TranslateTransform.YProperty, slide);
+
+        // 纵向拉伸：移动中拉长 → 微缩 → 复位，模拟液态玻璃的粘滞感
+        var stretch = new DoubleAnimationUsingKeyFrames();
+        stretch.KeyFrames.Add(new EasingDoubleKeyFrame(1.24, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(190)))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        });
+        stretch.KeyFrames.Add(new EasingDoubleKeyFrame(0.96, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(340)))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut },
+        });
+        stretch.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(460))));
+        NavCapsuleScale.BeginAnimation(ScaleTransform.ScaleYProperty, stretch);
+        _navCapsuleY = targetY;
     }
 
     public async Task<bool> WaitForCloseDecisionAsync(CancellationToken cancellationToken = default)
