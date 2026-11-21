@@ -86,6 +86,39 @@ public class DownloadFaultIntegrationTests : IDisposable
     }
 
     [DownloadIntegrationFact]
+    public async Task RealHttp_HeaderStall_TimesOutAndRecovers()
+    {
+        // 服务器接受连接但不回响应头：ConnectTimeout 与 HttpClient.Timeout 都管不到这一阶段，
+        // 修复前该请求会无限挂起；修复后由传输层头阶段超时（1s）转为 connectionFault 重试并完成下载
+        var data = FaultInjectionServer.GenerateData(2 * 1024 * 1024);
+        using var server = new FaultInjectionServer(data, new FaultProfile
+        {
+            HeaderStallEvery = 3
+        });
+        using var transport = new DownloadHttpTransport(headerReceiveTimeout: TimeSpan.FromSeconds(1));
+
+        var result = await new DownloadEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = $"{server.BaseUrl}/fw.bin",
+            DestinationDirectory = CreateDestination(),
+            Connections = 2,
+            ExpectedSha256 = Sha256Of(data)
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed, result.Error);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+        server.Dispose(); // 挂起 handler 的日志在收尾时才落盘，先排空再断言（Dispose 幂等）
+        var headerStalled = server.SnapshotLog().Count(entry => entry.Status == 0);
+        Assert.True(headerStalled > 0, "应至少出现一次头阶段挂起（超时路径未触发则用例失去意义）");
+        TestEvidence.Save("响应头超时恢复", new
+        {
+            headerStalledResponses = headerStalled,
+            dataRequests = server.DataRequests,
+            sha256 = Sha256Of(data)
+        });
+    }
+
+    [DownloadIntegrationFact]
     public async Task RealHttp_MaxConns503_CompletesWithBackoff()
     {
         var data = FaultInjectionServer.GenerateData(5 * 1024 * 1024);

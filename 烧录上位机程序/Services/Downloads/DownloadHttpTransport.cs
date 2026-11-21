@@ -9,7 +9,8 @@ using 烧录上位机程序.Models.Downloads;
 namespace 烧录上位机程序.Services.Downloads;
 
 /// <summary>生产 HTTP 传输：SocketsHttpHandler + HTTP/1.1 钉死（避免 H2 把多段 Range 挤进单连接被服务端限速）、
-/// 连接超时 10s、整体超时无限（卡死交给引擎看门狗）。重定向不自动跟随——逐跳校验后再继续
+/// 连接超时 10s、响应头超时 60s（DefaultHeaderReceiveTimeout 可注入）、整体超时无限（内容卡死交给引擎看门狗）。
+/// 重定向不自动跟随——逐跳校验后再继续
 /// （普通下载仅要求 http/https；镜像清单链路要求 https 公网，防止 30x 旁路首跳校验）。
 /// Content 流由 TransportResponse.DisposeAsync 释放；HttpResponseMessage 本体不释放——
 /// 其资源随 Content 流释放归还连接池。读取阶段的中断异常映射为可重试的 DownloadTransportException。</summary>
@@ -19,16 +20,25 @@ public sealed class DownloadHttpTransport : IDownloadTransport, IDisposable
     public const int MaxRedirects = 5;
 
     private readonly HttpClient _client;
+    private readonly TimeSpan _headerReceiveTimeout;
 
-    public DownloadHttpTransport(DownloadSettings? settings = null)
-        : this(CreateHandler(settings), settings)
+    /// <summary>响应头等待超时：ConnectTimeout 只覆盖 TCP/TLS 建连，"已连上但不出响应头"（黑洞/坏代理）
+    /// 由本超时兜底；内容阶段的卡死仍由引擎看门狗负责（ResponseHeadersRead 模式下 HttpClient.Timeout 不约束内容流）。</summary>
+    public static readonly TimeSpan DefaultHeaderReceiveTimeout = TimeSpan.FromSeconds(60);
+
+    public DownloadHttpTransport(DownloadSettings? settings = null, TimeSpan? headerReceiveTimeout = null)
+        : this(CreateHandler(settings), settings, headerReceiveTimeout)
     {
     }
 
     /// <summary>注入自定义 HttpMessageHandler（重定向/异常映射的单元测试接缝；代理设置仅对默认 SocketsHttpHandler 生效）。</summary>
-    public DownloadHttpTransport(HttpMessageHandler handler, DownloadSettings? settings = null)
+    public DownloadHttpTransport(HttpMessageHandler handler, DownloadSettings? settings = null,
+        TimeSpan? headerReceiveTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        if (headerReceiveTimeout is { } headerTimeout && headerTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(headerReceiveTimeout), "响应头超时必须为正。");
+        _headerReceiveTimeout = headerReceiveTimeout ?? DefaultHeaderReceiveTimeout;
         _client = new HttpClient(handler, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
         _client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
         _client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "*/*");
@@ -69,18 +79,28 @@ public sealed class DownloadHttpTransport : IDownloadTransport, IDisposable
             httpRequest.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
 
             HttpResponseMessage response;
-            try
+            // 头阶段超时只覆盖到响应头返回（ResponseHeadersRead）：离开作用域即解除定时器，不影响内容读；
+            // 调用方取消经链接令牌原样上抛 OCE，不误报为超时
+            using (var headersCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
-                response = await _client.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (HttpRequestException error)
-            {
-                throw new DownloadTransportException("连接失败：" + error.Message, connectionFault: true);
-            }
-            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                throw new DownloadTransportException("连接超时（10 秒内未建立连接），请检查网络或代理设置。", connectionFault: true);
+                headersCts.CancelAfter(_headerReceiveTimeout);
+                try
+                {
+                    response = await _client.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead,
+                        headersCts.Token).ConfigureAwait(false);
+                }
+                catch (HttpRequestException error)
+                {
+                    throw new DownloadTransportException("连接失败：" + error.Message, connectionFault: true);
+                }
+                catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new DownloadTransportException(
+                        headersCts.IsCancellationRequested
+                            ? $"等待响应头超时（{_headerReceiveTimeout.TotalSeconds:0} 秒内未收到响应头），请检查网络或代理设置。"
+                            : "连接超时（10 秒内未建立连接），请检查网络或代理设置。",
+                        connectionFault: true);
+                }
             }
 
             if (response.StatusCode is HttpStatusCode.Moved or HttpStatusCode.Found
@@ -150,10 +170,12 @@ public sealed class DownloadHttpTransport : IDownloadTransport, IDisposable
         }
     }
 
-    /// <summary>If-Range 值既可能是 ETag（带引号）也可能是 HTTP 日期（Last-Modified 兜底）。</summary>
+    /// <summary>If-Range 值既可能是 ETag（带引号）也可能是 HTTP 日期（Last-Modified 兜底）。
+    /// 弱 ETag（W/ 前缀）不是强验证器，RFC 7233 §3.2 禁止将其放入 If-Range：拒识后走日期分支或省略头。</summary>
     private static RangeConditionHeaderValue? ParseIfRange(string value)
     {
-        if (EntityTagHeaderValue.TryParse(value, out var etag)) return new RangeConditionHeaderValue(etag);
+        if (EntityTagHeaderValue.TryParse(value, out var etag) && !etag.IsWeak)
+            return new RangeConditionHeaderValue(etag);
         if (DateTimeOffset.TryParseExact(value, "r", CultureInfo.InvariantCulture, DateTimeStyles.None,
                 out var rfc1123))
             return new RangeConditionHeaderValue(rfc1123);

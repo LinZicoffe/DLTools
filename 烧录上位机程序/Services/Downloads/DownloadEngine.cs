@@ -206,12 +206,12 @@ public sealed class DownloadEngine
         if (journal is not null)
         {
             var segments = journal.ReadSegments().ToArray();
-            // 新鲜度校验：双侧有 ETag 则必须相等；否则退回 Last-Modified 比对（任一侧缺失即视为已变更），
-            // 防止无验证器的服务器在同长度内容变更后拼出混合版本文件
-            var validatorsCompatible = journal.ETag.Length > 0 && probe.ETag.Length > 0
+            // 新鲜度校验：双侧有强 ETag 则必须相等；弱 ETag（W/ 前缀）不是强验证器，连同"任一侧缺失"一律退回
+            // Last-Modified 比对且双侧都有才可能兼容——无验证器的服务器变更同长度内容时必须重下，防止拼出混合版本文件
+            var validatorsCompatible = IsStrongETag(journal.ETag) && IsStrongETag(probe.ETag)
                 ? string.Equals(journal.ETag, probe.ETag, StringComparison.Ordinal)
-                : journal.LastModified.Length == 0
-                    || string.Equals(journal.LastModified, probe.LastModified, StringComparison.Ordinal);
+                : journal.LastModified.Length > 0 && probe.LastModified.Length > 0
+                    && string.Equals(journal.LastModified, probe.LastModified, StringComparison.Ordinal);
             if (!validatorsCompatible || journal.TotalLength != total || !CoversRange(segments, total))
             {
                 var doneSoFar = segments.Sum(segment => segment.Completed);
@@ -236,8 +236,9 @@ public sealed class DownloadEngine
 
         var handle = File.OpenHandle(DownloadJournal.TempPathFor(finalPath), FileMode.Open, FileAccess.Write,
             FileShare.None, FileOptions.Asynchronous);
-        // If-Range 校验值：优先 ETag，其次 Last-Modified（资源已变更时服务器回 200，触发单流重下）
-        var ifRangeValue = probe.ETag.Length > 0 ? probe.ETag : probe.LastModified;
+        // If-Range 校验值：优先强 ETag（弱 ETag 禁入 If-Range，RFC 7233 §3.2），其次 Last-Modified
+        // （资源已变更时服务器回 200，触发单流重下）
+        var ifRangeValue = IsStrongETag(probe.ETag) ? probe.ETag : probe.LastModified;
         try
         {
             Interlocked.Exchange(ref state.DoneRaw, planner.CompletedBytes);
@@ -343,9 +344,15 @@ public sealed class DownloadEngine
             // 顺序硬约束：Snapshot 先于 FlushToDisk——快照后落盘的字节只会多不会少，方向安全（宁可少报重下）。
             if (File.Exists(DownloadJournal.JournalPathFor(finalPath)))
             {
-                var snapshot = planner.Snapshot();
-                if (!handle.IsClosed) RandomAccess.FlushToDisk(handle);
-                journal?.SaveSegments(snapshot);
+                // 尽力而为落盘：磁盘满/杀毒占用等 IO 故障不得替换原始异常或取消语义（OCE 优先上抛），
+                // 保存失败仅损失续传进度（方向安全：journal 永不超报已落盘字节）
+                try
+                {
+                    var snapshot = planner.Snapshot();
+                    if (!handle.IsClosed) RandomAccess.FlushToDisk(handle);
+                    journal?.SaveSegments(snapshot);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
             }
             handle.Dispose();
         }
@@ -585,6 +592,10 @@ public sealed class DownloadEngine
         }
         return covered == total;
     }
+
+    /// <summary>弱 ETag（W/ 前缀）不能作续传验证器：RFC 7232 §2.3 要求强验证器，RFC 7233 §3.2 禁入 If-Range。</summary>
+    private static bool IsStrongETag(string etag) =>
+        etag.Length > 0 && !etag.StartsWith("W/", StringComparison.Ordinal);
 
     /// <summary>全新下载的落盘准备：初始单段规划器 → 预分配 .dltmp → 创建续传日志（段表取 Snapshot）。</summary>
     private static DynamicSegmentPlanner StartFresh(string finalPath, long total,
@@ -863,7 +874,10 @@ public sealed class DownloadEngine
                     && now - _journalSaveMilliseconds < JournalForceSaveInterval.TotalMilliseconds) return;
                 var snapshot = planner.Snapshot();
                 RandomAccess.FlushToDisk(handle);
-                journal.SaveSegments(snapshot);
+                // journal 持久化尽力而为：.dltask.json 被杀毒/索引器瞬时占用等瞬态 IO 故障不得报废整个下载
+                // （只损失续传粒度，方向安全）；FlushToDisk 失败仍上抛——那是磁盘健康信号
+                try { journal.SaveSegments(snapshot); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
                 _journalSaveBytes = done;
                 _journalSaveMilliseconds = now;
             }

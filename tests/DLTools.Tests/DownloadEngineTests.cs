@@ -543,6 +543,86 @@ public class DownloadEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task WeakETagJournal_RestartsFromZero()
+    {
+        var data = TestData(3 * 1024 * 1024);
+        var finalPath = Path.Combine(_workspace.Root, "out", "fw.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
+        // 预置弱 ETag 续传记录：W/ 前缀不是强验证器，即使服务器返回相同弱值也不得据此续传
+        DownloadJournal.Create(finalPath, "http://8.8.8.8/fw.bin", "W/\"v1\"", "",
+            data.Length, "fw.bin", "",
+            [new DownloadSegment(0, 2 * 1024 * 1024 - 1, 1024 * 1024),
+             new DownloadSegment(2 * 1024 * 1024, data.Length - 1, 0)]);
+        File.WriteAllText(DownloadJournal.TempPathFor(finalPath), new string('x', data.Length));
+
+        var server = new LoggedSegmentServer(data) { ETag = "W/\"v1\"" };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+
+        var result = await CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = Path.GetDirectoryName(finalPath)!, Connections = 2
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.False(result.Resumed); // 弱 ETag 不可作续传验证器 → 放弃记录重新下载
+        Assert.Contains(server.SnapshotRanges(), range => range.Start == 0);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+    }
+
+    [Fact]
+    public async Task NoValidatorsOnEitherSide_RestartsFromZero()
+    {
+        // journal 与探测均无 ETag/Last-Modified（部分 CDN 不下发验证器）：
+        // 契约"任一侧缺失即视为已变更"→ 必须放弃续传，否则同长度内容变更会被静默拼成混合文件
+        var data = TestData(3 * 1024 * 1024);
+        var finalPath = Path.Combine(_workspace.Root, "out", "fw.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
+        DownloadJournal.Create(finalPath, "http://8.8.8.8/fw.bin", "", "",
+            data.Length, "fw.bin", "",
+            [new DownloadSegment(0, 2 * 1024 * 1024 - 1, 1024 * 1024),
+             new DownloadSegment(2 * 1024 * 1024, data.Length - 1, 0)]);
+        File.WriteAllText(DownloadJournal.TempPathFor(finalPath), new string('x', data.Length));
+
+        var server = new LoggedSegmentServer(data) { ETag = "", LastModified = "" };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+
+        var result = await CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = Path.GetDirectoryName(finalPath)!, Connections = 2
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.False(result.Resumed);
+        Assert.Contains(server.SnapshotRanges(), range => range.Start == 0);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+    }
+
+    [Fact]
+    public async Task WeakETagProbe_OmitsIfRangeFromDataRequests()
+    {
+        // 弱 ETag 禁入 If-Range（RFC 7233 §3.2 MUST NOT）：合规服务器收到弱 If-Range 会忽略 Range 回 200
+        // 全量，续传全部丢失；不合规服务器可能照发 206。修复后必须省略头（无 Last-Modified 可退）或退回日期
+        var data = TestData(3 * 1024 * 1024);
+        var server = new LoggedSegmentServer(data) { ETag = "W/\"v1\"" };
+        var transport = new FakeDownloadTransport((request, _) => Task.FromResult(server.Serve(request)));
+        var destination = Path.Combine(_workspace.Root, "out");
+        Directory.CreateDirectory(destination);
+
+        var result = await CreateEngine(transport).DownloadAsync(new DownloadOptions
+        {
+            Url = "http://8.8.8.8/fw.bin", DestinationDirectory = destination, Connections = 2
+        }, _ => Task.CompletedTask, CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.Equal(data, await File.ReadAllBytesAsync(result.FilePath!));
+        var dataRequests = transport.SnapshotRequests()
+            .Where(request => request.RangeStart is not null && request.RangeEnd != 0).ToList();
+        Assert.NotEmpty(dataRequests);
+        Assert.All(dataRequests,
+            request => Assert.DoesNotContain("W/", request.IfRangeETag ?? "")); // 无 Last-Modified 可退 → 头省略
+    }
+
+    [Fact]
     public async Task HtmlResponseWithDispositionFileName_DownloadsFile()
     {
         var html = "<html>release notes</html>"u8.ToArray();

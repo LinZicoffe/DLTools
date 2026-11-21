@@ -25,6 +25,8 @@ internal sealed record FaultProfile
     /// <summary>按 (数据请求序号, 区间起点, 区间终点) 精确配速（字节/秒，0=不限）；非空时优先于 RateBytesPerSecond。</summary>
     public Func<int, long, long, long>? RateBytesPerSecondByRequest { get; init; }
     public int? EtagChangeAfterRequest { get; init; }
+    /// <summary>每第 N 个数据请求收到后不回任何响应头，挂起直到客户端超时断开（验证传输层头阶段超时兜底）。</summary>
+    public int? HeaderStallEvery { get; init; }
     public string ETag { get; init; } = "\"v1\"";
     public string LastModified { get; init; } = "";
     public bool FaultProbeRequests { get; init; }
@@ -179,6 +181,15 @@ internal sealed class FaultInjectionServer : IDisposable
                 if (profile.RetryAfterSeconds is { } retryAfter)
                     response.Headers["Retry-After"] = retryAfter.ToString();
                 response.ContentLength64 = 0;
+                return;
+            }
+            if (applyFaults && profile.HeaderStallEvery is { } headerStallEvery && headerStallEvery > 0
+                && seq % headerStallEvery == 0)
+            {
+                status = 0; // 从未发出响应
+                // 不写响应头，挂起到服务器 Dispose 才收尾（与 StallAtBytes 同语义：.NET 8 无法感知
+                // 客户端断开，客户端会先头超时中止并继续重试）；不落 _ranges（响应不存在）
+                await Task.Delay(Timeout.Infinite, _stop.Token).ConfigureAwait(false);
                 return;
             }
 
