@@ -1,6 +1,6 @@
 # DL小工具
 
-C# / .NET 8 / WPF 的常用工具集合。左侧选择“固件烧录”“项目打包”“离线授权”“IP 扫描”“高速下载”或“C盘清理”，右侧保留对应页面状态；左侧导航为液态玻璃选中胶囊样式，切页时胶囊滑动回弹落位。默认进入烧录页；窗口默认1280×800，最小1000×700，表单可滚动。
+C# / .NET 8 / WPF 的常用工具集合。左侧选择“固件烧录”“项目打包”“离线授权”“IP 扫描”“IP 纯净度”“高速下载”或“C盘清理”，右侧保留对应页面状态；左侧导航为液态玻璃选中胶囊样式，切页时胶囊滑动回弹落位。默认进入烧录页；窗口默认1280×800，最小1000×700，表单可滚动。
 
 ## AI 开发说明
 
@@ -18,6 +18,7 @@ C# / .NET 8 / WPF 的常用工具集合。左侧选择“固件烧录”“项�
 | 项目打包 | 识别 WinForms / WPF 项目，生成指定路径、指定名称的 Inno Setup EXE 安装包 |
 | 离线授权 | 管理我方设备档案，输入六位申请码并生成六位授权码，无需联网 |
 | 客户端 DEMO | 提供 WinForms、WPF 两套示例，演示验证、激活保存和错误限次 |
+| IP 纯净度 | 检测当前出口 IP 的网络身份与隐私标记，并单独显示 ChatGPT / Claude 连通性、出口一致性与 UDP 出口 |
 | 高速下载 | 多连接 HTTP Range 分段下载（连接数自学习上限、慢连接自动甩负载），断点续传、限速、镜像清单竞速与 SHA-256 校验，可与烧录/打包并行 |
 | C盘清理 | 按类别安全清理可再生缓存与 AI 工具产物；对话数据库/模型仅展示，记忆与配置永不触碰，逐条审计 |
 
@@ -72,6 +73,24 @@ dotnet test "tests/DLTools.Tests/DLTools.Tests.csproj" -c Release --filter Fully
 ```
 
 默认测试跳过这两项实网测试。证据 JSON 默认写到测试输出目录的 `TestResults`；可用 `DLTOOLS_IPSCAN_EVIDENCE` 指定证据目录。
+
+## IP 纯净度
+
+1. 左侧选择“IP 纯净度”。进入页面不会自动发请求。
+2. 点击“开始检测”。大约 10 秒完成 6 项：出口 IP、IP 类型与风险标记、ChatGPT、Claude、UDP 出口、出口一致性。整次最长 30 秒，超时的项目按“请求超时”收尾，仍给出结论。
+3. 分数只评价出口 IP 本身（住宅/机房、VPN、代理、Tor、中继）。能不能连上 AI 服务、出口是否一致、UDP 是否绕过代理，都单独显示，不计入分数。ChatGPT 或 Claude 看到另一个出口时，会单独评估那个出口。
+4. 可随时取消。关窗需确认，并等待在途请求结束。切页不释放这次检测。
+
+请求由本机直接发往 Cloudflare、IPinfo、ip-api、OpenAI 与 Anthropic，跟随系统代理和当前路由（含 TUN），不经过 DL小工具 的服务器，也不保存结果。桌面版没有浏览器的 WebRTC，UDP 出口用 STUN 探测；只有境外服务器返回的、与出口同协议且地址不同的公网结果才算泄漏，国内直连不计入。结果只反映这一次的网络状态。
+
+使用截图与验证边界见[IP 纯净度验收记录](docs/验收记录-IP纯净度检测.md)，阶段说明见[功能日志](IP纯净度检测功能更新日志.md)。需要重跑本机实网测试时：
+
+```powershell
+$env:DLTOOLS_IPPURITY_INTEGRATION = '1'
+dotnet test "tests/DLTools.Tests/DLTools.Tests.csproj" -c Release --filter "FullyQualifiedName~IpPurityIntegration"
+```
+
+默认测试跳过这项实网测试。证据 JSON 写到测试输出目录的 `TestResults`；可用 `DLTOOLS_IPPURITY_EVIDENCE` 指定证据目录。
 
 ## 离线授权
 
@@ -172,7 +191,7 @@ dotnet test "tests/DLTools.Tests/DLTools.Tests.csproj" -c Release --filter Fully
 
 ### 任务与文件恢复
 
-全局一次执行一个烧录、项目、授权档案、IP 扫描或 C盘清理任务，切页不会释放运行资格；打包关窗会等进程退出和目录恢复，授权档案任务会等安全保存结束，IP 扫描会等在途探测退出，C盘清理会等审计日志写入完成，均不使用烧录的15秒上限。退出问题与打包覆盖问题按顺序显示。
+全局一次执行一个烧录、项目、授权档案、IP 扫描、IP 纯净度或 C盘清理任务，切页不会释放运行资格；打包关窗会等进程退出和目录恢复，授权档案任务会等安全保存结束，IP 扫描会等在途探测退出，IP 纯净度会等在途请求结束，C盘清理会等审计日志写入完成，均不使用烧录的15秒上限。高速下载可与上述任务并行。退出问题与打包覆盖问题按顺序显示。
 
 现代.NET发布到本次任务的独占目录；Framework先确认备份入口正常输出目录，再还原/重新构建并整目录收集。保留运行时、原生库、语言资源、XML/JSON，只过滤调试产物。已有脚本的非空输入目录同样需要确认备份。成功后保留旧目录备份；失败或取消恢复旧输入和旧安装包，部分输出另存保留。
 
@@ -222,7 +241,7 @@ dotnet test "tests/DLTools.Tests/DLTools.Tests.csproj" -c Release
 DL小工具.sln
 烧录上位机程序/
   DL小工具.csproj          # net8.0-windows / WPF / x64
-  Pages/                  # 烧录页、打包页、离线授权页、IP扫描页、高速下载页、C盘清理页
+  Pages/                  # 烧录页、打包页、离线授权页、IP扫描页、IP纯净度页、高速下载页、C盘清理页
   ViewModels/             # 页面状态与命令
   Models/Packaging/       # 识别结果与打包选项
   Models/Authorization/   # 设备档案展示数据（不含密钥）
@@ -232,6 +251,7 @@ DL小工具.sln
   Services/AtomicFileWriter.cs # 各存储共用的原子落盘收尾（Replace/Move）
   Services/Authorization/ # 六位计算、DPAPI档案、加密备份恢复
   Services/IpScanService.cs # 不依赖WPF的IPv4 /24 ICMP扫描
+  Services/IpPurity/      # 出口纯净度：白名单传输、情报、STUN、评分与编排
   Services/Downloads/ # 多连接分段下载：引擎/调度器/续传日志/镜像清单/设置存储
   Services/Cleanup/       # C盘清理：规则目录、PathGuard、遍历、执行器、审计日志
   Resources/              # 共享样式及既有翻译资源
@@ -271,6 +291,7 @@ J-Link DLL可放在EXE旁，也支持SEGGER安装目录、IAR捆绑目录和PATH
 | 2026-11-20 高速下载引擎升级 | F06–F10（故障注入测试服务器/HostLimits 自学习连接上限/稀疏预分配/动态对半劈分段/慢连接 shed，MDM 设计 clean-room 实现）于 `feature/download-engine-upgrade` 经三 Reviewer 终审通过：Release 构建零警告零错误，全仓 534 通过/0 失败/43 跳过，门控 552/25/0（18 项真实回环集成，shed A/B ratio 0.304、组合故障与镜像链路冒烟通过）；2026-11-21 用户确认测试通过后合入 `main` |
 | 2026-11-21 高速下载二轮审查修复 | 用户要求再次开启多 agent 审查，5 维独立复审确认终审结论，修复 3×P1+2×P2（弱 ETag 禁入 If-Range 并退出续传验证器/Last-Modified 双侧判定/SendAsync 响应头超时 60s/finally 落盘防护/journal 持久化非致命化），新增 4 用例：全仓 537 通过/0 失败/44 跳过，门控 556/25/0（含真实回环头挂起超时恢复用例）；遗留 P2/P3 五条已登记功能日志，2026-11-21 随分支一并合入 `main` |
 | 2026-11-21 导航液态玻璃选中胶囊 | 左侧导航改造为 StackPanel + 纯视觉胶囊层（不参与命中测试、不改 ViewModel 与页面、不新增 NuGet 依赖）：切页时 460ms BackEase 滑动 + 纵向拉伸回弹（1→1.24→0.96→1），启动与窗口缩放无动画落位；外观全部资源化（DynamicResource）便于整键换肤。Release 构建零警告零错误；UIA 实机验证浅/深主题启动落位、动画中途拉伸帧、落定对齐、缩放校正与页面布局无回归；用户实测确认 |
+| 2026-11-25 IP 纯净度 | 功能分支 `feature/ip-purity-check`：Release 构建零警告零错误；排除实网项后 600 通过、0 失败、44 跳过。实网检测 1 次通过。窗口截图见 `docs/images/ip-purity-*.png`。尚未合并 |
 
 干净目标机运行时安装、异机授权恢复、重装恢复、真实断电、150% DPI，以及硬件取消/忙碌关窗等完整烧录回归仍待现场验收；2026-11-11 烧录页 MVVM 化改动了界面绑定（输入校验提示、按钮状态、阶段颜色、日志滚动），烧录页 UI 人工回归同样待补。高速下载与 C盘清理均以用户 2026-11-10 实测确认为准；高速下载的公网大文件与自建清单联调细节、UI 截图（docs/images/download-ui.png），以及 C盘清理的 UI 截图与首次完整清理数字待补充记录。
 
@@ -285,3 +306,11 @@ J-Link DLL可放在EXE旁，也支持SEGGER安装目录、IAR捆绑目录和PATH
 - 内置读回未显式禁用 J-Link Flash 缓存；上述指定板卡结果由独立禁用缓存的会话另行核对，其他任务不能自动视为完成同等验证。
 
 源程序移植映射见`docs/PORTING_MAP.md`，DLL导出表见`docs/JLink_DLL_exports.txt`；返回值语义参考[pylink-square](https://github.com/square/pylink)。
+
+## 更新日志
+
+### 2026-11-25
+
+*V1*：
+
+- 新增功能：添加 IP 纯净度页面，检测出口 IP 的网络身份与隐私标记，并单独显示 AI 连通性、出口一致性与 UDP 出口

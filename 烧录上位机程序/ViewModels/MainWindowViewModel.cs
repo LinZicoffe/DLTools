@@ -10,6 +10,7 @@ public partial class MainWindowViewModel : ObservableObject
     private readonly PackagingPage _packagingPage = new();
     private readonly OfflineAuthorizationPage _authorizationPage = new();
     private readonly IpScanPage _ipScanPage = new();
+    private readonly IpPurityPage _ipPurityPage = new();
     private readonly DownloadPage _downloadPage = new();
     private readonly CleanupPage _cleanupPage = new();
 
@@ -20,6 +21,7 @@ public partial class MainWindowViewModel : ObservableObject
     public bool IsPackagingSelected => ReferenceEquals(CurrentPage, _packagingPage);
     public bool IsAuthorizationSelected => ReferenceEquals(CurrentPage, _authorizationPage);
     public bool IsIpScanSelected => ReferenceEquals(CurrentPage, _ipScanPage);
+    public bool IsIpPuritySelected => ReferenceEquals(CurrentPage, _ipPurityPage);
     public bool IsDownloadSelected => ReferenceEquals(CurrentPage, _downloadPage);
     public bool IsCleanupSelected => ReferenceEquals(CurrentPage, _cleanupPage);
 
@@ -29,6 +31,7 @@ public partial class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(IsPackagingSelected));
         OnPropertyChanged(nameof(IsAuthorizationSelected));
         OnPropertyChanged(nameof(IsIpScanSelected));
+        OnPropertyChanged(nameof(IsIpPuritySelected));
         OnPropertyChanged(nameof(IsDownloadSelected));
         OnPropertyChanged(nameof(IsCleanupSelected));
     }
@@ -37,6 +40,9 @@ public partial class MainWindowViewModel : ObservableObject
     [RelayCommand] private void ShowPackaging() => CurrentPage = _packagingPage;
     [RelayCommand] private void ShowAuthorization() => CurrentPage = _authorizationPage;
     [RelayCommand] private void ShowIpScan() => CurrentPage = _ipScanPage;
+    [RelayCommand] private void ShowIpPurity() => CurrentPage = _ipPurityPage;
     [RelayCommand] private void ShowDownload() => CurrentPage = _downloadPage;
     [RelayCommand] private void ShowCleanup() => CurrentPage = _cleanupPage;
+
+    public void AbandonIpPurity() => _ipPurityPage.ViewModel.AbandonPendingResults();
 }

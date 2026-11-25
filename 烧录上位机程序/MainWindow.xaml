@@ -95,6 +95,13 @@
                                 </Style>
                             </Button.Style>
                         </Button>
+                        <Button Content="IP 纯净度" Command="{Binding ShowIpPurityCommand}" Height="44" Margin="0,0,0,10">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource NavButtonStyle}">
+                                    <Style.Triggers><DataTrigger Binding="{Binding IsIpPuritySelected}" Value="True"><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="FontWeight" Value="Bold"/></DataTrigger></Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
                         <Button Content="高速下载" Command="{Binding ShowDownloadCommand}" Height="44" Margin="0,0,0,10">
                             <Button.Style>
                                 <Style TargetType="Button" BasedOn="{StaticResource NavButtonStyle}">

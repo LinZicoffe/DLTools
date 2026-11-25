@@ -33,7 +33,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         // 不再读取历史配置，避免被锁定在无法切回的语言
         I18nService.LoadLanguage("zh_CN");
 
-        // 胶囊跟随：ViewModel 切页时六个 IsXxxSelected 一起通知，
+        // 胶囊跟随：ViewModel 切页时七个 IsXxxSelected 一起通知，
         // 复用该通知驱动胶囊滑动，不改动 ViewModel
         _navButtons = NavItemsHost.Children.OfType<Button>().ToArray();
         if (DataContext is INotifyPropertyChanged notifier)
@@ -52,8 +52,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             nameof(MainWindowViewModel.IsPackagingSelected) when viewModel.IsPackagingSelected => 1,
             nameof(MainWindowViewModel.IsAuthorizationSelected) when viewModel.IsAuthorizationSelected => 2,
             nameof(MainWindowViewModel.IsIpScanSelected) when viewModel.IsIpScanSelected => 3,
-            nameof(MainWindowViewModel.IsDownloadSelected) when viewModel.IsDownloadSelected => 4,
-            nameof(MainWindowViewModel.IsCleanupSelected) when viewModel.IsCleanupSelected => 5,
+            nameof(MainWindowViewModel.IsIpPuritySelected) when viewModel.IsIpPuritySelected => 4,
+            nameof(MainWindowViewModel.IsDownloadSelected) when viewModel.IsDownloadSelected => 5,
+            nameof(MainWindowViewModel.IsCleanupSelected) when viewModel.IsCleanupSelected => 6,
             _ => -1,
         };
         if (index < 0) return;
@@ -150,7 +151,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                             ? "授权档案任务正在进行。确定取消任务，等待安全保存结束后退出吗？"
                             : host.CurrentKind == BackgroundOperationKind.IpScanning
                                 ? "IP 扫描正在进行。确定取消扫描，等待在途探测结束后退出吗？"
-                                : host.CurrentKind == BackgroundOperationKind.DiskCleanup
+                                : host.CurrentKind == BackgroundOperationKind.IpPurityCheck
+                                    ? "IP 纯净度检测正在进行。确定取消检测，等待在途请求结束后退出吗？"
+                                    : host.CurrentKind == BackgroundOperationKind.DiskCleanup
                                     ? "C盘清理正在进行。确定取消清理，等待审计日志写入完成后退出吗？"
                                     : "项目检查或打包任务正在进行。确定取消任务，等待进程结束及文件恢复后退出吗？";
                 var downloadQuestion = !downloadsBusy
@@ -179,6 +182,8 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             {
                 var task = host.CurrentTask;
                 var waitingForFlashing = host.CurrentKind == BackgroundOperationKind.Flashing;
+                if (host.CurrentKind == BackgroundOperationKind.IpPurityCheck && DataContext is MainWindowViewModel shell)
+                    shell.AbandonIpPurity();
                 try { host.RequestCancellation(); }
                 catch (Exception ex)
                 {

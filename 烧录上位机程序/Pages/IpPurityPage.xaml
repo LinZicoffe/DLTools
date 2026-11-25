@@ -1,0 +1,250 @@
+<local:BasePage x:Class="烧录上位机程序.Pages.IpPurityPage"
+                Title="IP 纯净度"
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:controls="clr-namespace:烧录上位机程序.Controls"
+                xmlns:local="clr-namespace:烧录上位机程序.Pages">
+    <Page.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolVis"/>
+        <controls:ToneBrushConverter x:Key="ToneBrush"/>
+        <controls:ToneBackgroundConverter x:Key="ToneBack"/>
+        <controls:TextVisibilityConverter x:Key="TextVis"/>
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="{StaticResource CardBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="18,16"/>
+            <Setter Property="Margin" Value="0,0,0,14"/>
+        </Style>
+        <Style x:Key="Pill" TargetType="Border">
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Margin" Value="0,0,8,8"/>
+            <Setter Property="Background" Value="{Binding Tone, Converter={StaticResource ToneBack}}"/>
+        </Style>
+    </Page.Resources>
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="22,18">
+            <Grid Margin="0,0,0,14">
+                <StackPanel>
+                    <TextBlock Text="IP 纯净度" FontSize="24" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}"/>
+                    <TextBlock Text="{Binding HeaderStatus}" Margin="0,6,0,0" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                    <Button Content="开始检测" Command="{Binding StartCommand}" Style="{StaticResource PrimaryButtonStyle}" MinWidth="96"/>
+                    <Button Content="取消" Command="{Binding CancelCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="10,0,0,0" MinWidth="72"/>
+                </StackPanel>
+            </Grid>
+
+            <Border Style="{StaticResource Card}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <controls:IpPurityRing Width="120" Height="120" Margin="0,0,18,0"
+                                           Progress="{Binding RingValue}" Tone="{Binding RingTone}"
+                                           PrimaryText="{Binding RingPrimary}" SecondaryText="{Binding RingSecondary}"/>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" FontSize="16" Foreground="{StaticResource TextPrimaryBrush}"/>
+                        <TextBlock Text="{Binding SlowText}" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#C2410C"
+                                   Visibility="{Binding SlowText, Converter={StaticResource TextVis}}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0" Visibility="{Binding ShowAi, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="AI 直连" VerticalAlignment="Center" Margin="0,0,8,8" Foreground="{StaticResource TextSecondaryBrush}"/>
+                            <ItemsControl ItemsSource="{Binding Services}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Style="{StaticResource Pill}">
+                                            <TextBlock Foreground="{Binding Tone, Converter={StaticResource ToneBrush}}">
+                                                <Run Text="{Binding Name, Mode=OneWay}"/><Run Text=" "/><Run Text="{Binding Status, Mode=OneWay}"/>
+                                            </TextBlock>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Visibility="{Binding ShowAi, Converter={StaticResource BoolVis}}">
+                            <Border Style="{StaticResource Pill}" Background="{Binding ConsistencyTone, Converter={StaticResource ToneBack}}">
+                                <TextBlock Text="{Binding ConsistencyText}" Foreground="{Binding ConsistencyTone, Converter={StaticResource ToneBrush}}"/>
+                            </Border>
+                            <Border Style="{StaticResource Pill}" Background="{Binding UdpTone, Converter={StaticResource ToneBack}}">
+                                <TextBlock Text="{Binding UdpText}" Foreground="{Binding UdpTone, Converter={StaticResource ToneBrush}}"/>
+                            </Border>
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Border Style="{StaticResource Card}" Visibility="{Binding ShowIdentity, Converter={StaticResource BoolVis}}">
+                <StackPanel>
+                    <DockPanel LastChildFill="False">
+                        <TextBlock DockPanel.Dock="Left" Text="{Binding IpText}" FontFamily="Consolas" FontSize="22" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding IpText}"/>
+                        <Button DockPanel.Dock="Left" Content="复制" Command="{Binding CopyIpCommand}" Style="{StaticResource SecondaryButtonStyle}"
+                                Margin="10,0,10,0" Padding="10,4"/>
+                        <Border DockPanel.Dock="Left" Style="{StaticResource Pill}" Background="{Binding TypeTone, Converter={StaticResource ToneBack}}">
+                            <TextBlock Text="{Binding TypeText}" Foreground="{Binding TypeTone, Converter={StaticResource ToneBrush}}"/>
+                        </Border>
+                    </DockPanel>
+                    <TextBlock Text="{Binding LocationText}" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding AsnText}" Margin="0,4,0,0" TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <ItemsControl ItemsSource="{Binding Flags}" Margin="0,10,0,0">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><UniformGrid Rows="1"/></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="0,0,8,0" Padding="10,8" CornerRadius="8" Background="{Binding Tone, Converter={StaticResource ToneBack}}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12"/>
+                                        <TextBlock Text="{Binding Value}" FontWeight="SemiBold" Foreground="{Binding Tone, Converter={StaticResource ToneBrush}}"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="{Binding SourceText}" Margin="0,8,0,0" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding SplitText}" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#C2410C"
+                               Visibility="{Binding SplitText, Converter={StaticResource TextVis}}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource Card}" Visibility="{Binding ShowFailure, Converter={StaticResource BoolVis}}">
+                <StackPanel>
+                    <TextBlock Text="各数据源的返回" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <ItemsControl ItemsSource="{Binding Errors}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <Grid Visibility="{Binding ShowDetails, Converter={StaticResource BoolVis}}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="14"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="AI 服务" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                        <ItemsControl ItemsSource="{Binding Services}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,0,0,12">
+                                        <DockPanel>
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                            <Button Content="打开" Command="{Binding DataContext.OpenSiteCommand, RelativeSource={RelativeSource AncestorType=Page}}"
+                                                    CommandParameter="{Binding Site}" HorizontalAlignment="Right" Style="{StaticResource SecondaryButtonStyle}" Padding="8,2"/>
+                                        </DockPanel>
+                                        <TextBlock Text="{Binding Region}" Margin="0,4,0,0" TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="{Binding Trace}" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                        <TextBlock Text="{Binding Api}" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                        <TextBlock Text="{Binding Notes}" Margin="0,2,0,0" TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="{Binding Split}" Margin="0,2,0,0" TextWrapping="Wrap" Foreground="#C2410C"
+                                                   Visibility="{Binding Split, Converter={StaticResource TextVis}}"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+                <StackPanel Grid.Column="2">
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="出口地址" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <ItemsControl ItemsSource="{Binding ExitRows}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,0,0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="110"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="72"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding Left}" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding Right}" FontFamily="Consolas" TextTrimming="CharacterEllipsis" ToolTip="{Binding Right}"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding Note}" HorizontalAlignment="Right"
+                                                       Foreground="{Binding Tone, Converter={StaticResource ToneBrush}}"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="UDP 出口" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <ItemsControl ItemsSource="{Binding UdpRows}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,0,0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="1.4*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding Left}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Left}"/>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="{Binding Right}" FontFamily="Consolas" TextTrimming="CharacterEllipsis" ToolTip="{Binding Right}"/>
+                                                <TextBlock Text="{Binding Note}" Foreground="{Binding Tone, Converter={StaticResource ToneBrush}}" FontSize="12"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+
+            <Border Style="{StaticResource Card}" Visibility="{Binding ShowDetails, Converter={StaticResource BoolVis}}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,12,0">
+                        <TextBlock Text="扣分" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <ItemsControl ItemsSource="{Binding Deductions}">
+                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,0,8,8" Padding="8,4" CornerRadius="10" Background="#F3F3F3">
+                                        <TextBlock Text="{Binding}"/>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="建议" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <ItemsControl ItemsSource="{Binding Advice}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="{Binding Footnote}" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Border Style="{StaticResource Card}" Visibility="{Binding ShowNotes, Converter={StaticResource BoolVis}}">
+                <StackPanel>
+                    <TextBlock Text="检测说明" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <TextBlock TextWrapping="Wrap" Margin="0,0,0,6"><Run FontWeight="SemiBold" Text="请求直连第三方。"/><Run Text="由本机直接发往 Cloudflare、IPinfo、ip-api、OpenAI 与 Anthropic，不经过 DL小工具 的服务器，也不保存结果。"/></TextBlock>
+                    <TextBlock TextWrapping="Wrap" Margin="0,0,0,6"><Run FontWeight="SemiBold" Text="跟随系统代理。"/><Run Text="走系统代理和当前路由（含 TUN）。只改浏览器代理时，这个检测看不到。"/></TextBlock>
+                    <TextBlock TextWrapping="Wrap"><Run FontWeight="SemiBold" Text="结果有时效。"/><Run Text="只反映这一次的网络状态。切换节点后重新检测。"/></TextBlock>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</local:BasePage>

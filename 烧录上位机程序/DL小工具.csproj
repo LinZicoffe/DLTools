@@ -32,6 +32,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>DLTools.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- i18n 翻译文件：始终复制到输出目录 -->
     <None Update="Resources\i18n\*.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>

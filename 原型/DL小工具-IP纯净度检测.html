@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-zcode-design>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DL小工具 · IP 纯净度检测（重设计稿）</title>
+<style>
+/*@@PRODUCT_CSS_START@@*/
+/* ---------- 令牌：前两行取自 Resources/UiStyles.xaml，其余为本页新增 ---------- */
+:root{
+  --page-bg:#F3F3F3;--card:#FFFFFF;--card-border:#E5E5E5;--control-border:#D1D1D1;
+  --text:#1B1B1B;--text-2:#616161;
+  --accent:#0F6CBD;--accent-hover:#115EA3;--accent-pressed:#0C3B5E;--on-accent:#FFFFFF;
+  --ok:#0E700E;--warn:#A1430A;--bad:#C50F1F;
+  --ok-bg:#DFF6DD;--warn-bg:#FFF4CE;--bad-bg:#FDE7E9;--muted-bg:#EFEFEF;--track:#E8E8E8;
+  --control-hover:#F5F5F5;--control-pressed:#ECECEC;
+  --btn-disabled:#B8B8B8;--btn-disabled-bg:#FAFAFA;
+  --capsule-bg:rgba(15,108,189,.18);--capsule-border:rgba(255,255,255,.4);
+  --capsule-shadow:0 2px 16px rgba(15,108,189,.35);
+  --capsule-highlight:linear-gradient(rgba(255,255,255,.13),rgba(255,255,255,0));
+  --app-border:#C9C9C9;--app-shadow:0 22px 54px -20px rgba(27,27,27,.38),0 2px 8px rgba(27,27,27,.12);
+  --skel-a:#ECECEC;--skel-b:#F6F6F6;
+  --font:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
+  --mono:Consolas,"Cascadia Mono",monospace;
+  --radius-card:8px;--radius-control:6px;--space:14px;--motion:150ms;
+  --win-w:1280px;--win-h:800px;--scale:1;
+}
+
+/* ---------- 窗口外壳（对应 MainWindow.xaml） ---------- */
+.app{position:absolute;left:0;top:0;width:var(--win-w);transform:scale(var(--scale));transform-origin:0 0;
+  display:flex;flex-direction:column;background:var(--page-bg);color:var(--text);
+  font:400 13px/1.5 var(--font);border:1px solid var(--app-border);border-radius:8px;overflow:hidden;box-shadow:var(--app-shadow)}
+.app.fixed{height:var(--win-h)}
+.i{width:16px;height:16px;flex:none;display:inline-block;vertical-align:middle}
+.mono{font-family:var(--mono)}
+.app-title{position:relative;flex:none;height:58px;display:flex;align-items:center;justify-content:space-between;padding-left:20px}
+.app-title::after{content:"";position:absolute;left:20px;right:20px;bottom:0;height:1px;background:var(--card-border)}
+.brand{display:flex;align-items:center;gap:12px}
+.brand-tile{width:36px;height:36px;border-radius:8px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center}
+.brand-tile .i{width:20px;height:20px}
+.brand-name{display:block;font-size:16px;font-weight:700;line-height:1.25}
+.brand-sub{display:block;margin-top:2px;font-size:11px;line-height:1.3;color:var(--text-2);letter-spacing:.01em}
+.caption{display:flex;align-self:flex-start}
+.cap{width:46px;height:32px;display:grid;place-items:center;color:var(--text)}
+.cap .i{width:14px;height:14px}
+.cap-close{color:var(--text)}
+.app-body{flex:1;min-height:0;display:grid;grid-template-columns:180px minmax(0,1fr)}
+.nav{border-right:1px solid var(--card-border)}
+.nav-inner{margin:16px 12px;display:flex;flex-direction:column;gap:10px}
+.nav-item{height:44px;border:1px solid transparent;border-radius:6px;color:var(--text);display:flex;align-items:center;justify-content:center;padding:0 8px}
+.nav-item.is-active{position:relative;border-radius:22px;border-color:var(--capsule-border);background:var(--capsule-bg);
+  color:var(--accent);font-weight:700;box-shadow:var(--capsule-shadow)}
+.nav-item.is-active::before{content:"";position:absolute;left:12px;right:12px;top:3px;height:13px;border-radius:21px;
+  background:var(--capsule-highlight);pointer-events:none}
+
+/* ---------- 页面骨架（对应 BasePage：Margin 22,18，标题 24 SemiBold） ---------- */
+.page{container-type:inline-size;min-width:0;margin:18px 22px;display:flex;flex-direction:column}
+.app.fixed .page{min-height:0;overflow:hidden}
+.pg-head{flex:none;margin-bottom:18px}
+.pg-head h1{margin:0;font-size:24px;font-weight:600;line-height:1.3;color:var(--text)}
+.pg-head p{margin:6px 0 0;color:var(--text-2)}
+.pg-scroll{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:var(--space);
+  scrollbar-width:thin;scrollbar-color:var(--control-border) transparent}
+.app:not(.fixed) .pg-scroll{overflow:visible}
+.card{flex:none;background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius-card);padding:16px 18px}
+
+/* ---------- 按钮（对应 Primary / SecondaryButtonStyle） ---------- */
+.btn{height:32px;padding:0 14px;border:1px solid var(--control-border);border-radius:var(--radius-control);background:var(--card);
+  color:var(--text);font:inherit;display:inline-flex;align-items:center;gap:6px;cursor:pointer;transition:background var(--motion)}
+.btn:hover{background:var(--control-hover)}
+.btn:active{background:var(--control-pressed)}
+.btn:disabled{background:var(--btn-disabled-bg);opacity:.55;cursor:default}
+.btn-primary{padding:0 18px;border-color:var(--accent);background:var(--accent);color:var(--on-accent)}
+.btn-primary:hover{background:var(--accent-hover)}
+.btn-primary:active{background:var(--accent-pressed)}
+.btn-primary:disabled{border-color:var(--btn-disabled);background:var(--btn-disabled);opacity:.8}
+.btn .i{width:14px;height:14px}
+.icon-btn{width:28px;height:28px;flex:none;border:1px solid var(--control-border);border-radius:var(--radius-control);
+  background:var(--card);color:var(--text-2);display:grid;place-items:center;cursor:pointer;transition:background var(--motion)}
+.icon-btn:hover{background:var(--control-hover);color:var(--text)}
+.icon-btn .i{width:14px;height:14px}
+.copied{font-size:12px;font-weight:600;color:var(--ok)}
+
+/* ---------- 状态胶囊（呼应导航胶囊的造型） ---------- */
+.pill{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 10px 0 8px;border-radius:12px;
+  font-size:12px;font-weight:600;line-height:1;white-space:nowrap}
+.pill .i{width:14px;height:14px}
+.pill.ok{background:var(--ok-bg);color:var(--ok)}
+.pill.warn{background:var(--warn-bg);color:var(--warn)}
+.pill.bad{background:var(--bad-bg);color:var(--bad)}
+.pill.muted{background:var(--muted-bg);color:var(--text-2)}
+
+/* ---------- 结果卡：左侧结论，右侧出口身份 ---------- */
+.hero-top{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px;margin-bottom:16px}
+.hero-meta{display:flex;align-items:center;gap:8px;min-width:0;color:var(--text-2);font-size:12px}
+.hero-meta .i{width:14px;height:14px;color:var(--text-2)}
+.hero-meta.is-ok .i{color:var(--ok)}
+.hero-meta.is-bad .i{color:var(--bad)}
+.hero-actions{display:flex;gap:10px;flex:none}
+.progress{flex:none;width:180px;height:8px;border-radius:4px;background:var(--track);overflow:hidden}
+.progress i{display:block;height:100%;border-radius:4px;background:var(--accent);transition:width .3s cubic-bezier(.2,0,0,1)}
+.hero-grid{display:grid;grid-template-columns:330px minmax(0,1fr)}
+.zone-verdict{display:flex;flex-direction:column;gap:12px;min-width:0;padding-right:22px}
+.zone-id{display:flex;flex-direction:column;gap:6px;min-width:0;padding-left:22px;border-left:1px solid var(--card-border)}
+.verdict{display:grid;grid-template-columns:112px minmax(0,1fr);gap:16px;align-items:center}
+.ring-wrap{position:relative;width:112px;height:112px}
+.ring{width:112px;height:112px;transform:rotate(-90deg)}
+.ring-track{fill:none;stroke:var(--track);stroke-width:10}
+.ring-value{fill:none;stroke-width:10;stroke-linecap:round;stroke-dasharray:326.7;
+  stroke-dashoffset:calc(326.7 * (1 - var(--p, 0) / 100));transition:stroke-dashoffset .45s cubic-bezier(.2,0,0,1)}
+.ring-value.good{stroke:var(--ok)}
+.ring-value.warn{stroke:var(--warn)}
+.ring-value.bad{stroke:var(--bad)}
+.ring-value.run{stroke:var(--text-2);stroke-dasharray:70 256.7;stroke-dashoffset:0;transform-origin:60px 60px;animation:spin 1.1s linear infinite}
+.ring-label{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1}
+.ring-label b{font-size:34px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.ring-label small{margin-top:2px;font-size:12px;letter-spacing:.01em;color:var(--text-2)}
+.grade{font-size:24px;font-weight:600;line-height:1.25}
+.grade.good{color:var(--ok)}
+.grade.warn{color:var(--warn)}
+.grade.bad{color:var(--bad)}
+.grade.none{color:var(--text-2)}
+.verdict-text p{margin:4px 0 0;color:var(--text-2)}
+.verdict-text p b{color:var(--text);font-weight:600}
+.ai-line{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.ai-caption{margin-right:2px;font-size:12px;color:var(--text-2)}
+.ded-line{display:flex;flex-wrap:wrap;gap:2px 10px;font-size:12px;color:var(--text-2)}
+.ded-line b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
+.ded-line .ded + .ded::before{content:"·";margin-right:10px;color:var(--text-2);font-weight:400}
+.rule-note{margin:0;font-size:13px;color:var(--text-2)}
+/* 卡片底部通栏：扣分一览在左，规则说明在右；两栏正文因此等高 */
+.hero-foot{grid-column:1 / -1;display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 18px;
+  margin-top:14px;padding-top:12px;border-top:1px solid var(--card-border)}
+.hero-foot .rule-note{text-align:right}
+.id-lead{font-size:12px;color:var(--text-2)}
+.id-head{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.id-ip{font-size:24px;font-weight:600;line-height:1.25;letter-spacing:-.01em;overflow-wrap:anywhere}
+.id-loc,.id-asn{color:var(--text-2);overflow-wrap:anywhere}
+.id-loc b{color:var(--text);font-weight:600}
+.id-src{margin-top:2px;font-size:12px;color:var(--text-2)}
+.flags{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin-top:8px;border-top:1px solid var(--card-border);border-bottom:1px solid var(--card-border)}
+.flag{display:flex;align-items:center;gap:6px;height:40px;min-width:0;font-size:12px;color:var(--text-2)}
+.flag + .flag{padding-left:12px;border-left:1px solid var(--card-border)}
+.flag b{margin-left:auto;font-weight:600;color:var(--text);white-space:nowrap}
+.flag.ok .i{color:var(--ok)}
+.flag.hit .i{color:var(--bad)}
+.flag.hit b{color:var(--bad)}
+.flag.unknown .i{color:var(--text-2)}
+.split-note{display:flex;gap:8px;margin-top:6px;padding:8px 10px;border-radius:var(--radius-control);background:var(--warn-bg);color:var(--warn)}
+.split-note b{font-weight:600}
+.split-note .i{margin-top:2px}
+.checklist{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));column-gap:18px}
+.check{display:flex;align-items:center;gap:8px;min-height:48px;border-bottom:1px solid var(--card-border);font-size:13px}
+.check .i{color:var(--text-2)}
+.check b{display:block;font-weight:600}
+.check small{display:block;font-size:13px;color:var(--text-2)}
+.errors{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:18px}
+.errors li{display:flex;align-items:center;gap:8px;min-height:36px;border-bottom:1px solid var(--card-border);color:var(--text-2)}
+.errors .i{color:var(--bad)}
+.facts{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.facts b{display:block;font-size:13px;font-weight:600}
+.facts span{display:block;margin-top:2px;font-size:13px;color:var(--text-2)}
+
+/* ---------- 明细卡：AI 服务 / 出口与泄漏 ---------- */
+.row-b{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--space);align-items:stretch}
+.card-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:8px}
+.card-head h2{margin:0;font-size:14px;font-weight:600;line-height:1.4}
+.head-note{font-size:12px;color:var(--text-2);text-align:right}
+.svc{padding:10px 0;border-top:1px solid var(--card-border)}
+.svc:first-of-type{padding-top:0;border-top:0}
+.svc:last-child{padding-bottom:0}
+.svc-main{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.svc-name{font-size:14px;font-weight:600}
+.svc-vendor{margin-left:6px;font-size:12px;font-weight:400;color:var(--text-2)}
+.kv{display:grid;gap:3px;margin:8px 0 0}
+.kv > div{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px}
+.kv dt{font-size:12px;color:var(--text-2)}
+.kv dd{margin:0;font-size:12px;overflow-wrap:anywhere}
+.note{margin:6px 0 0;font-size:13px;color:var(--text-2)}
+.note.is-warn{color:var(--warn)}
+.exit-intel{display:flex;flex-wrap:wrap;gap:4px 6px;margin-top:2px}
+.link-btn{display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:2px 0;border:0;background:none;
+  font:inherit;font-size:12px;color:var(--text-2);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.link-btn:hover{color:var(--text)}
+.link-btn .i{width:12px;height:12px}
+.sub + .sub{margin-top:14px;padding-top:12px;border-top:1px solid var(--card-border)}
+.sub-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px;min-height:28px}
+.sub-head h3{margin:0;font-size:13px;font-weight:600}
+.hint{margin-left:6px;font-size:12px;font-weight:400;letter-spacing:.06em;color:var(--text-2)}
+.mini{width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px}
+.mini th{padding:4px 10px 4px 0;text-align:left;font-weight:400;color:var(--text-2);border-bottom:1px solid var(--card-border)}
+.mini td{padding:6px 10px 6px 0;border-bottom:1px solid var(--card-border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini th:last-child,.mini td:last-child{padding-right:0;text-align:right}
+.mini tr:last-child td{border-bottom:0}
+.mini .t-ok{color:var(--ok)}
+.mini .t-bad{color:var(--bad)}
+.mini .t-muted{color:var(--text-2)}
+.svc-pending{display:grid;gap:8px;padding:6px 0 2px}
+
+/* ---------- 评分明细 ---------- */
+.detail-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:22px}
+.ded-table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px}
+.ded-table th{padding:4px 10px 4px 0;text-align:left;font-weight:400;color:var(--text-2);border-bottom:1px solid var(--card-border)}
+.ded-table td{padding:6px 10px 6px 0;border-bottom:1px solid var(--card-border);vertical-align:top;overflow-wrap:anywhere}
+.ded-table tr:last-child td{border-bottom:0}
+.ded-table .grp{color:var(--text-2)}
+.ded-table .num{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ded-table .num.hit{color:var(--bad)}
+.ded-table .num.zero,.ded-table .num.miss{color:var(--text-2);font-weight:400}
+.ded-table .ev{color:var(--text-2)}
+.advice h3{margin:0 0 6px;font-size:13px;font-weight:600}
+.sub-title{margin:12px 0 2px;font-size:13px;font-weight:600}
+.advice ul{margin:0;padding-left:18px}
+.advice li{margin:2px 0}
+.unscored-lead{margin:0 0 8px;color:var(--text-2)}
+.unscored{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:18px}
+.unscored li{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid var(--card-border)}
+.unscored b{font-weight:400;color:var(--text-2)}
+
+/* ---------- 页脚 ---------- */
+.pg-foot{flex:none;padding:0 2px 2px;font-size:13px;color:var(--text-2)}
+.pg-foot p{margin:0 0 4px}
+.pg-foot .link-btn{margin:0 2px}
+.sep{margin:0 6px}
+
+/* ---------- 加载占位 ---------- */
+.skel{display:block;height:12px;border-radius:4px;background:linear-gradient(90deg,var(--skel-a) 25%,var(--skel-b) 37%,var(--skel-a) 63%);
+  background-size:400% 100%;animation:skel 1.4s ease infinite}
+.w30{width:30%}.w45{width:45%}.w60{width:60%}.w80{width:80%}
+.is-slow .skel,.is-slow .ring-value.run{animation-play-state:paused}
+@keyframes skel{0%{background-position:100% 0}100%{background-position:0 0}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@container (max-width:860px){
+  .hero-grid{grid-template-columns:290px minmax(0,1fr)}
+  .verdict{grid-template-columns:100px minmax(0,1fr);gap:12px}
+  .ring-wrap,.ring{width:100px;height:100px}
+  .checklist,.errors,.facts{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .detail-grid{grid-template-columns:minmax(0,1fr)}
+}
+@media (prefers-reduced-motion:reduce){
+  .skel,.ring-value.run{animation:none}
+  .ring-value,.btn,.progress i{transition:none}
+}
+/*@@PRODUCT_CSS_END@@*/
+
+/* ---------- 稿外：演示控制与说明 ---------- */
+:root{--demo-bg:#E6E8EC;--demo-fg:#1B1B1B;--demo-fg-2:#5C6168;--demo-line:#CDD1D8;--demo-panel:#F7F8FA}
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--demo-bg);color:var(--demo-fg);font:400 13px/1.5 var(--font)}
+.stage{min-height:100vh;padding:16px;display:flex;flex-direction:column;align-items:center;gap:14px}
+.demo-bar{width:min(1600px,100%);display:flex;flex-wrap:wrap;align-items:center;gap:10px 22px;padding:10px 14px;
+  background:var(--demo-panel);border:1px solid var(--demo-line);border-radius:10px}
+.demo-tag{font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--demo-fg-2)}
+.demo-field{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--demo-fg-2)}
+.demo-bar select{height:30px;padding:0 28px 0 10px;border:1px solid var(--demo-line);border-radius:6px;background:var(--card);color:var(--demo-fg);font:inherit}
+.seg{display:inline-flex;border:1px solid var(--demo-line);border-radius:6px;overflow:hidden}
+.seg label{position:relative}
+.seg input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer}
+.seg span{display:block;padding:5px 12px;font-size:13px;line-height:1.4;color:var(--demo-fg-2);background:var(--card);transition:background var(--motion),color var(--motion)}
+.seg label + label span{border-left:1px solid var(--demo-line)}
+.seg input:checked + span{background:var(--demo-fg);color:var(--card)}
+.seg input:focus-visible + span{outline:2px solid var(--demo-fg);outline-offset:-2px}
+.stage-main{width:min(1600px,100%);display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:16px;align-items:start}
+.win{position:relative;width:100%}
+.notes{position:sticky;top:16px;padding:14px 14px 10px;background:var(--demo-panel);border:1px solid var(--demo-line);border-radius:10px}
+.notes h2{margin:0;font-size:14px;font-weight:600}
+.notes .lead{margin:4px 0 10px;font-size:12px;color:var(--demo-fg-2)}
+.notes ol{margin:0;padding:0;list-style:none}
+.notes button{display:grid;grid-template-columns:22px minmax(0,1fr);gap:0 8px;width:100%;padding:8px;border:0;border-radius:8px;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.notes button:hover,.notes button:focus-visible{background:var(--demo-bg)}
+.notes em{grid-row:span 2;width:22px;height:22px;border-radius:50%;background:var(--demo-fg);color:var(--card);font-style:normal;font-size:12px;font-weight:600;display:grid;place-items:center}
+.notes b{font-size:13px;font-weight:600}
+.notes small{display:block;margin-top:2px;font-size:12px;color:var(--demo-fg-2)}
+.hl{outline:2px solid var(--demo-fg) !important;outline-offset:3px}
+@media (max-width:1380px){.stage-main{grid-template-columns:minmax(0,1fr)}.notes{position:static}}
+@media (prefers-reduced-motion:reduce){.seg span{transition:none}}
+</style>
+</head>
+<body>
+<div id="dltools-ipq" class="stage">
+  <header class="demo-bar">
+    <span class="demo-tag">示例数据 · 非实时</span>
+    <label class="demo-field">场景
+      <select id="demo-scene"></select>
+    </label>
+    <div class="demo-field" role="group" aria-label="评分规则">评分规则
+      <span class="seg">
+        <label><input type="radio" name="demo-model" value="v1"><span>网页版规则</span></label>
+        <label><input type="radio" name="demo-model" value="v2" checked><span>建议规则</span></label>
+      </span>
+    </div>
+    <div class="demo-field" role="group" aria-label="窗口尺寸">窗口
+      <span class="seg">
+        <label><input type="radio" name="demo-win" value="1280" checked><span>1280 × 800</span></label>
+        <label><input type="radio" name="demo-win" value="1000"><span>1000 × 700</span></label>
+        <label><input type="radio" name="demo-win" value="full"><span>全高展开</span></label>
+      </span>
+    </div>
+  </header>
+
+  <div class="stage-main">
+    <div class="win">
+      <!--@@WINDOW_START@@-->
+      <div class="app fixed" id="app-window">
+        <div class="app-title">
+          <div class="brand">
+            <span class="brand-tile"><svg class="i" data-i="bolt" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13.4 2.8 5.6 13.6h5.1l-.9 7.6 7.8-10.8h-5.1z"/></svg></span>
+            <span><span class="brand-name">DL小工具</span><span class="brand-sub">常用工具集合</span></span>
+          </div>
+          <div class="caption" aria-hidden="true">
+            <span class="cap"><svg class="i" data-i="min" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5.5 12h13"/></svg></span>
+            <span class="cap"><svg class="i" data-i="max" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="6" y="6" width="12" height="12" rx="1"/></svg></span>
+            <span class="cap"><svg class="i" data-i="x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m6 6 12 12"/><path d="M18 6 6 18"/></svg></span>
+          </div>
+        </div>
+        <div class="app-body">
+          <div class="nav">
+            <div class="nav-inner">
+              <span class="nav-item">固件烧录</span>
+              <span class="nav-item">项目打包</span>
+              <span class="nav-item">离线授权</span>
+              <span class="nav-item">IP 扫描</span>
+              <span class="nav-item is-active" aria-current="page">IP 纯净度</span>
+              <span class="nav-item">高速下载</span>
+              <span class="nav-item">C盘清理</span>
+            </div>
+          </div>
+          <main class="page" id="page"></main>
+        </div>
+      </div>
+      <!--@@WINDOW_END@@-->
+    </div>
+
+    <aside class="notes" aria-labelledby="notes-title">
+      <h2 id="notes-title">设计说明</h2>
+      <p class="lead">点击条目，左侧对应区域会高亮。</p>
+      <ol>
+        <li><button type="button" data-target=".zone-verdict"><em>1</em><b>结论先行</b><small>评分、等级、一句话结论在同一视线高度；扣分压成一行。</small></button></li>
+        <li><button type="button" data-target=".ai-line"><em>2</em><b>AI 直连单列</b><small>两个服务的结论做成胶囊放在评分下方。建议规则里它不再计入纯净度。</small></button></li>
+        <li><button type="button" data-target=".zone-id"><em>3</em><b>出口身份一条带</b><small>IP、地区、ASN 和四项风险标记的位置固定，不随内容多少错位。</small></button></li>
+        <li><button type="button" data-target=".sub.udp"><em>4</em><b>UDP 出口代替 WebRTC</b><small>桌面程序没有浏览器的 WebRTC，改用 STUN 探测 UDP 是否绕过代理。</small></button></li>
+        <li><button type="button" data-target=".split-note"><em>5</em><b>分流提示</b><small>AI 服务看到的是另一个出口时，单独标出那个出口和它的风险。</small></button></li>
+        <li><button type="button" data-target=".hero-top"><em>6</em><b>进度与取消常驻</b><small>六项检查逐项落位；首次进入不自动发请求，检测中可随时取消。</small></button></li>
+      </ol>
+    </aside>
+  </div>
+</div>
+<!--@@JS_START@@-->
+<script>
+(function () {
+  'use strict';
+
+  const root = document.getElementById('dltools-ipq');
+  const app = root.querySelector('#app-window');
+  const page = root.querySelector('#page');
+  const winBox = root.querySelector('.win');
+  const sceneSelect = root.querySelector('#demo-scene');
+
+  /* ---------- 图标：内联 SVG 单线 ---------- */
+  const ICONS = {
+    ok: '<circle cx="12" cy="12" r="9"/><path d="m8.4 12.3 2.4 2.4 4.8-5.1"/>',
+    warn: '<circle cx="12" cy="12" r="9"/><path d="M12 7.6v5.1"/><path d="M12 16.3h.01"/>',
+    bad: '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6"/><path d="m15 9-6 6"/>',
+    help: '<circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.4 2.6c-.7.3-1 .8-1 1.6"/><path d="M12 16.5h.01"/>',
+    copy: '<rect x="9" y="9" width="10" height="10" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/>',
+    out: '<path d="M14 5h5v5"/><path d="m19 5-8 8"/><path d="M17 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h4"/>'
+  };
+  function icon(name) {
+    return '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>';
+  }
+  const esc = (text) => String(text).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+
+  /* ---------- 文案表 ---------- */
+  const GRADE = { good: '纯净', warn: '一般', bad: '高风险' };
+  const COUNTRY = { US: '美国', JP: '日本', CN: '中国' };
+  const TYPE = { hosting: ['warn', '机房 / 云服务'], isp: ['ok', '住宅 / 运营商宽带'], business: ['muted', '商业宽带'], education: ['warn', '教育网'] };
+  const CONF = { high: '准确度高', medium: '准确度中', low: '仅供参考' };
+  const SVC = {
+    ok: ['ok', '可直连'], risk: ['warn', '有风控风险'], unlisted: ['warn', '地区不在支持列表'],
+    region: ['bad', '地区受限'], blocked: ['bad', '无法连接'], none: ['muted', '无数据']
+  };
+  const TONE_ICON = { ok: 'ok', warn: 'warn', bad: 'bad', muted: 'help' };
+  const FLAGS = [['vpn', 'VPN'], ['proxy', '代理'], ['tor', 'Tor'], ['relay', '中继']];
+  // 国内服务器的直连是分流规则的正常结果，不计入泄漏；泄漏只看境外服务器。
+  const STUN = [
+    ['stun.cloudflare.com', 'foreign'], ['stun.l.google.com', 'foreign'],
+    ['stun.miwifi.com', 'mainland'], ['stun.qq.com', 'mainland']
+  ];
+  const CHECKS = [
+    ['出口 IP', '当前网络对外显示的地址、地区与运营商'],
+    ['IP 类型与风险', '机房 / 住宅，以及 VPN、代理、Tor、中继标记'],
+    ['ChatGPT', '接口与网站是否可达、地区是否受支持'],
+    ['Claude', '接口与网站是否可达、地区是否受支持'],
+    ['出口一致性', '各服务看到的出口是否相同'],
+    ['UDP 出口', 'UDP 流量是否绕过代理（STUN）']
+  ];
+  const STAGE_LABEL = ['正在获取出口 IP', '正在获取 IP 类型与风险', '正在检测 ChatGPT', '正在检测 Claude', '正在探测 UDP 出口', '正在汇总出口一致性'];
+
+  /* ---------- 场景（示例数据，地址取文档保留段 192.0.2.0/24、198.51.100.0/24、203.0.113.0/24） ---------- */
+  const noUdp = { 'stun.cloudflare.com': null, 'stun.l.google.com': null, 'stun.miwifi.com': null, 'stun.qq.com': null };
+  const API_OK = { reachable: true, ms: 56 };
+  const API_403 = { reachable: false, ms: 60, status: 403 };
+  const API_TIMEOUT = { reachable: false, ms: 9000, status: 0 };
+  const reached = (ip, loc, ms) => ({ reachable: true, ip: ip, loc: loc, ms: ms });
+  const TRACE_TIMEOUT = { reachable: false, ip: null, loc: null, ms: 9000 };
+  function flags(hosting, vpn, proxy, tor, relay) { return { hosting: hosting, vpn: vpn, proxy: proxy, tor: tor, relay: relay, mobile: false }; }
+  function svc(name, vendor, host, status, regionListed, regionText, trace, api, notes, exitIntel) {
+    return { name: name, vendor: vendor, host: host, site: 'https://' + host + '/', status: status, regionListed: regionListed,
+      regionText: regionText, trace: trace, api: api, notes: notes || [], exitIntel: exitIntel || null };
+  }
+  const SCENES = {
+    idle: { label: '未检测', phase: 'idle' },
+    running: { label: '检测中', phase: 'running', progress: 3 },
+
+    residential: {
+      label: '住宅 · AI 可直连', phase: 'done', meta: '14:32:07 · 用时 6.8 秒',
+      result: {
+        exit: { ip: '192.0.2.44', source: 'Cloudflare', ms: 38 },
+        place: { name: '日本', code: 'JP', region: '东京都', city: '东京' },
+        intel: { source: 'IPinfo', confidence: 'high', asn: 'AS17676', asnName: 'SoftBank Corp.', org: 'SoftBank BB Corp.', type: 'isp', flags: flags(false, false, false, false, false) },
+        services: [
+          svc('ChatGPT', 'OpenAI', 'chatgpt.com', 'ok', true, '所在地区在支持列表内', reached('192.0.2.44', 'JP', 41), API_OK),
+          svc('Claude', 'Anthropic', 'claude.ai', 'ok', true, '所在地区在支持列表内', reached('192.0.2.44', 'JP', 44), API_OK)
+        ],
+        exits: [['Cloudflare', '192.0.2.44'], ['ChatGPT', '192.0.2.44'], ['Claude', '192.0.2.44'], ['IPv6 探测', '2001:db8:40:1::a1b2:9c3d']],
+        udp: { 'stun.cloudflare.com': ['192.0.2.44', 38], 'stun.l.google.com': ['192.0.2.44', 210], 'stun.miwifi.com': null, 'stun.qq.com': null }
+      },
+      summary: { v1: 'IP 类型干净，适合注册和日常使用。', v2: 'IP 类型干净，适合注册和日常使用。' },
+      advice: ['未发现明显的风险信号，当前 IP 适合访问 AI 服务。']
+    },
+
+    cleandc: {
+      label: '机房 · 无标记', phase: 'done', meta: '09:02:14 · 用时 8.4 秒',
+      result: {
+        exit: { ip: '203.0.113.21', source: 'Cloudflare', ms: 25 },
+        place: { name: '美国', code: 'US', region: 'Virginia', city: 'Ashburn' },
+        intel: { source: 'IPinfo', confidence: 'high', asn: 'AS14618', asnName: 'Amazon.com, Inc.', org: 'Amazon Data Services Northern Virginia', type: 'hosting', flags: flags(true, false, false, false, false) },
+        services: [
+          svc('ChatGPT', 'OpenAI', 'chatgpt.com', 'ok', true, '所在地区在支持列表内', reached('203.0.113.21', 'US', 57), API_OK),
+          svc('Claude', 'Anthropic', 'claude.ai', 'ok', true, '所在地区在支持列表内', reached('203.0.113.21', 'US', 56), API_OK)
+        ],
+        exits: [['Cloudflare', '203.0.113.21'], ['ChatGPT', '203.0.113.21'], ['Claude', '203.0.113.21']],
+        udp: { 'stun.cloudflare.com': ['203.0.113.21', 821], 'stun.l.google.com': ['203.0.113.21', 850], 'stun.miwifi.com': ['192.0.2.44', 45], 'stun.qq.com': null }
+      },
+      summary: { v1: '机房 IP 可以打开网页，但不适合注册或长期登录账号。', v2: '机房 IP 可以打开网页，但不适合注册或长期登录账号。' },
+      udpNote: '境外 STUN 看到的地址与出口一致，UDP 没有绕过代理。国内 STUN 走直连（192.0.2.44），不计入泄漏。',
+      advice: ['当前是机房 IP：可以正常浏览，但不建议用于注册、订阅或长期登录 ChatGPT / Claude。', '没有 VPN、代理、Tor 标记，两个 AI 服务都可直连，这已经是机房 IP 能拿到的最高分。']
+    },
+
+    datacenter: {
+      label: '机房 + 代理', phase: 'done', meta: '14:32:07 · 用时 8.4 秒',
+      result: {
+        exit: { ip: '203.0.113.7', source: 'Cloudflare', ms: 54 },
+        place: { name: '美国', code: 'US', region: 'Virginia', city: 'Ashburn' },
+        intel: { source: 'IPinfo', confidence: 'high', asn: 'AS16509', asnName: 'Amazon.com, Inc.', org: 'Amazon Technologies Inc.', type: 'hosting', flags: flags(true, false, true, false, false) },
+        services: [
+          svc('ChatGPT', 'OpenAI', 'chatgpt.com', 'risk', true, '所在地区在支持列表内', reached('203.0.113.7', 'US', 57), API_OK, ['命中风险标记：机房 IP、代理']),
+          svc('Claude', 'Anthropic', 'claude.ai', 'region', true, '所在地区在支持列表内', reached('198.51.100.9', 'US', 56), API_403, ['Anthropic 的接口返回了地区限制（HTTP 403），当前出口所在地区不受支持'])
+        ],
+        exits: [['Cloudflare', '203.0.113.7'], ['ChatGPT', '203.0.113.7'], ['Claude', '198.51.100.9']],
+        udp: noUdp
+      },
+      summary: { v1: '风险信号明显，容易触发人机验证或封号，不建议用于账号操作。', v2: '机房 IP 且带代理标记，不建议用于注册或长期登录账号。' },
+      advice: ['当前是机房 IP：可以正常浏览，但不建议用于注册、订阅或长期登录 ChatGPT / Claude。', '该 IP 被标记为代理，重要账号建议改用住宅宽带。', 'Claude 在当前网络下地区受限，请换到受支持地区的节点后再测。', '不同来源的 IPv4 出口不一致，部分请求可能没有经过代理。']
+    },
+
+    mainland: {
+      label: '大陆家宽 · 未代理', phase: 'done', meta: '21:48:03 · 用时 9.6 秒',
+      result: {
+        exit: { ip: '203.0.113.61', source: 'Cloudflare', ms: 312 },
+        place: { name: '中国', code: 'CN', region: '上海', city: '上海' },
+        intel: { source: 'IPinfo', confidence: 'high', asn: 'AS4812', asnName: 'China Telecom (Group)', org: 'China Telecom', type: 'isp', flags: flags(false, false, false, false, false) },
+        services: [
+          svc('ChatGPT', 'OpenAI', 'chatgpt.com', 'blocked', null, '无法判定', TRACE_TIMEOUT, API_TIMEOUT, ['chatgpt.com 未连通（请求超时），请在浏览器中实际打开确认。']),
+          svc('Claude', 'Anthropic', 'claude.ai', 'blocked', null, '无法判定', TRACE_TIMEOUT, API_TIMEOUT, ['claude.ai 未连通（请求超时），请在浏览器中实际打开确认。'])
+        ],
+        exits: [['Cloudflare', '203.0.113.61']],
+        udp: { 'stun.cloudflare.com': ['203.0.113.61', 96], 'stun.l.google.com': null, 'stun.miwifi.com': ['203.0.113.61', 22], 'stun.qq.com': ['203.0.113.61', 31] }
+      },
+      summary: { v1: '当前网络访问 AI 服务受限，换到可用地区的节点后分数会回来。', v2: 'IP 是干净的住宅宽带。连不上 AI 服务是地区限制，不是这个 IP 的问题。' },
+      advice: ['ChatGPT、Claude 无法连接。请检查代理是否覆盖对应域名，或稍后重新检测。']
+    },
+
+    split: {
+      label: '分流 + UDP 泄漏', phase: 'done', meta: '19:05:41 · 用时 7.9 秒',
+      result: {
+        exit: { ip: '203.0.113.7', source: 'Cloudflare', ms: 54 },
+        place: { name: '美国', code: 'US', region: 'Virginia', city: 'Ashburn' },
+        intel: { source: 'IPinfo', confidence: 'high', asn: 'AS16509', asnName: 'Amazon.com, Inc.', org: 'Amazon Technologies Inc.', type: 'hosting', flags: flags(true, true, false, false, false) },
+        services: [
+          svc('ChatGPT', 'OpenAI', 'chatgpt.com', 'risk', true, '所在地区在支持列表内', reached('203.0.113.7', 'US', 57), API_OK, ['命中风险标记：机房 IP、VPN']),
+          svc('Claude', 'Anthropic', 'claude.ai', 'ok', true, '所在地区在支持列表内', reached('198.51.100.9', 'US', 56), API_OK, [],
+            { source: 'IPinfo', confidence: 'high', asn: 'AS45102', asnName: 'Alibaba (US) Technology Co., Ltd.', org: 'Alibaba (US) Technology Co., Ltd.', type: 'hosting', flags: flags(true, false, false, false, true) })
+        ],
+        exits: [['Cloudflare', '203.0.113.7'], ['ChatGPT', '203.0.113.7'], ['Claude', '198.51.100.9']],
+        udp: { 'stun.cloudflare.com': ['192.0.2.44', 821], 'stun.l.google.com': ['192.0.2.44', 850], 'stun.miwifi.com': ['192.0.2.44', 45], 'stun.qq.com': null }
+      },
+      summary: { v1: '风险信号明显，容易触发人机验证或封号，不建议用于账号操作。', v2: '机房 + VPN 出口，不建议用于注册或长期登录账号；另外 UDP 流量绕过了代理。' },
+      advice: ['UDP 出口与代理出口不同：在代理软件中开启 TUN 模式或 UDP 转发，否则 WebRTC 会暴露真实地址。', 'Claude 看到的是另一个出口 198.51.100.9（机房 + 中继），它有自己的风险标记。', '当前出口被标记为 VPN 且属于机房，重要账号建议改用住宅宽带。']
+    },
+
+    unknown: {
+      label: '数据不足', phase: 'done', meta: '11:20:55 · 用时 7.1 秒',
+      result: {
+        exit: { ip: '192.0.2.44', source: 'Cloudflare', ms: 38 },
+        place: { name: '日本', code: 'JP', region: '东京都', city: '东京' },
+        intel: { source: 'ip-api.com', confidence: 'medium', asn: 'AS17676', asnName: 'SoftBank Corp.', org: 'SoftBank BB Corp.', type: null,
+          flags: { hosting: false, vpn: null, proxy: false, tor: null, relay: null, mobile: false } },
+        services: [
+          svc('ChatGPT', 'OpenAI', 'chatgpt.com', 'ok', true, '所在地区在支持列表内', reached('192.0.2.44', 'JP', 41), API_OK),
+          svc('Claude', 'Anthropic', 'claude.ai', 'ok', true, '所在地区在支持列表内', reached('192.0.2.44', 'JP', 44), API_OK)
+        ],
+        exits: [['Cloudflare', '192.0.2.44'], ['ChatGPT', '192.0.2.44'], ['Claude', '192.0.2.44']],
+        udp: noUdp
+      },
+      summary: { v1: 'VPN、Tor、中继标记没有数据。这些项按未命中计分会得到纯净结果，因此本次不评分。', v2: 'VPN、Tor、中继标记没有数据。这些项按未命中计分会得到纯净结果，因此本次不评分。' },
+      advice: ['主情报源 IPinfo 没有返回结果，已退回到 ip-api.com；它不提供 VPN、Tor、中继标记。稍后重新检测，或到 IPinfo、Scamalytics 手动核对。']
+    },
+
+    offline: {
+      label: '网络不通', phase: 'failed', meta: '14:32:20 · 用时 12.6 秒',
+      summary: '四个出口数据源都没有返回结果。请检查网络或代理后重试。',
+      errors: ['Cloudflare：请求超时', 'IPinfo：网络错误或被拦截', 'ipify：请求超时', 'ipapi.co：请求超时']
+    }
+  };
+  Object.values(SCENES).forEach((scene) => {
+    if (scene.result) scene.result.exits = scene.result.exits.map(([source, ip]) => ({ source: source, ip: ip }));
+  });
+
+  /* ---------- 检测结果的归纳 ---------- */
+  function consistency(result) {
+    const isV6 = (ip) => ip.indexOf(':') >= 0;
+    const v4rows = result.exits.filter((r) => !isV6(r.ip)), v6rows = result.exits.filter((r) => isV6(r.ip));
+    const d4 = [...new Set(v4rows.map((r) => r.ip))], d6 = [...new Set(v6rows.map((r) => r.ip))];
+    const comparable = v4rows.length >= 2 || v6rows.length >= 2;
+    return {
+      rows: result.exits.map((r) => {
+        const group = isV6(r.ip) ? v6rows : v4rows;
+        const ref = (isV6(r.ip) ? d6 : d4)[0];
+        return Object.assign({}, r, { align: group.length < 2 ? 'single' : r.ip === ref ? 'match' : 'diff' });
+      }),
+      distinctV4: d4.length, distinctV6: d6.length,
+      mismatch: comparable ? d4.length >= 2 || d6.length >= 2 : null
+    };
+  }
+  function udpView(result) {
+    const exitIp = result.exit.ip;
+    const entries = STUN.map(([host, zone]) => ({ host: host, zone: zone, hit: result.udp[host] }));
+    const foreign = entries.filter((e) => e.zone === 'foreign' && e.hit);
+    const leaked = [...new Set(foreign.map((e) => e.hit[0]).filter((ip) => ip !== exitIp))];
+    return { state: foreign.length === 0 ? 'unknown' : leaked.length ? 'leak' : 'clean', leaked: leaked, entries: entries };
+  }
+
+  /* ---------- 评分：权重与网页版 score.js 一致；建议规则（v2）只是把 AI 可用性移出分数 ---------- */
+  const RULE = {
+    hosting: { high: 35, medium: 28, low: 18 }, business: 10, education: 16,
+    privacy: { tor: 45, vpn: 24, proxy: 22, relay: 18 }, privacyCap: 50,
+    service: { blocked: 16, region: 16, unlisted: 8 }, serviceCap: 32,
+    exitOne: 16, exitBoth: 20, exitExtra: 2, exitCap: 24, leakOne: 16, leakMany: 20,
+    good: 85, warn: 60
+  };
+  // 合计超过上限时，从当前最小的扣分项减起；并列的项同一轮一起减。
+  function applyCap(parts, cap) {
+    let sum = parts.reduce((total, part) => total + part.deduction, 0);
+    for (let guard = 0; sum > cap && guard < 10000; guard++) {
+      let best = Infinity;
+      parts.forEach((part) => { if (part.deduction > 0 && part.deduction < best) best = part.deduction; });
+      if (best === Infinity) break;
+      let moved = false;
+      for (let i = parts.length - 1; i >= 0 && sum > cap; i--) {
+        if (parts[i].deduction !== best) continue;
+        parts[i].deduction -= 1;
+        parts[i].capped = true;
+        if (parts[i].deduction === 0) parts[i].absorbed = true;
+        sum -= 1;
+        moved = true;
+      }
+      if (!moved) break;
+    }
+  }
+  function buildItems(result) {
+    const intel = result.intel || {}, f = intel.flags || {};
+    const type = intel.type || null, conf = intel.confidence || null;
+    const items = [];
+    const hosting = typeof f.hosting === 'boolean' ? f.hosting
+      : type === 'hosting' ? true : type === 'isp' || type === 'business' || type === 'education' ? false : null;
+    const typeKnown = !!(type || Object.keys(f).some((k) => f[k] != null));
+
+    const net = { group: '网络身份', label: '机房 / 托管 IP', short: '机房 / 托管', deduction: 0, gate: true, note: '' };
+    if (hosting === null) { net.missing = true; net.note = '没有机房数据'; }
+    else if (hosting) {
+      net.deduction = RULE.hosting[conf] || 28;
+      net.note = conf === 'high' ? '情报源确认属于云服务或托管机房' : conf === 'medium' ? '数据库标为机房，准确度中等' : conf === 'low' ? '仅按 ASN 或组织名推断' : '被标为机房，但来源未给出准确度';
+    } else net.note = type === 'isp' ? '住宅 / 运营商宽带' : '不是机房 IP';
+    items.push(net);
+    if (hosting === false && type === 'business') items.push({ group: '网络身份', label: '商业宽带', short: '商业宽带', deduction: RULE.business, note: '商业宽带，风控敏感度高于住宅网络' });
+    else if (hosting === false && type === 'education') items.push({ group: '网络身份', label: '教育网', short: '教育网', deduction: RULE.education, note: '教育网出口通常由多人共享' });
+
+    const present = ['tor', 'vpn', 'proxy', 'relay'].filter((k) => f[k] === true).sort((a, b) => RULE.privacy[b] - RULE.privacy[a]);
+    const privacy = ['tor', 'vpn', 'proxy', 'relay'].map((k) => {
+      const name = k === 'tor' ? 'Tor' : k === 'vpn' ? 'VPN' : k === 'proxy' ? '代理' : '中继';
+      // 标签与网页版 score.js 逐字一致（中文项不带空格），核对脚本才能按标签对上。
+      const row = { group: '隐私标记', label: k === 'proxy' || k === 'relay' ? name + '标记' : name + ' 标记', short: name, deduction: 0, gate: true, note: '' };
+      if (f[k] == null) { row.missing = true; row.note = '这项检测没有返回结果'; return row; }
+      if (f[k] !== true) { row.note = '无标记'; return row; }
+      const tier = present.indexOf(k);
+      row.deduction = Math.round(RULE.privacy[k] * (tier === 0 ? 1 : tier === 1 ? 0.5 : 0.25));
+      row.note = '已被标记' + (tier === 1 ? '，与更强的标记同时出现，按一半计入' : tier > 1 ? '，与更强的标记同时出现，按较低权重计入' : '');
+      return row;
+    });
+    applyCap(privacy.filter((row) => row.deduction > 0), RULE.privacyCap);
+    privacy.forEach((row) => items.push(row));
+
+    (result.services || []).forEach((s) => {
+      const row = { group: 'AI 服务', label: s.name, short: s.name, deduction: 0, gate: true, note: '' };
+      const listed = typeof s.regionListed === 'boolean' ? s.regionListed : null;
+      row.tone = SVC[s.status][0];
+      row.statusLabel = SVC[s.status][1];
+      if (!s.status) { row.missing = true; row.note = '这项检测没有返回结果'; }
+      else if (s.status === 'blocked') { row.deduction = RULE.service.blocked; row.note = listed === false ? '无法连接，所在地区也不在支持列表内' : '无法连接'; }
+      else if (s.status === 'region') { row.deduction = RULE.service.region; row.note = '接口返回了地区限制'; }
+      else if (listed === false) { row.deduction = RULE.service.unlisted; row.note = '接口可以访问，但所在地区不在官方支持列表内'; }
+      else if (s.status === 'risk') row.note = '可以连接。IP 风险已在其他项目计入，不重复扣分';
+      else if (listed === null) row.note = '可以连接，所在地区无法判定';
+      else row.note = '可以连接';
+      items.push(row);
+    });
+    applyCap(items.filter((item) => item.group === 'AI 服务' && item.deduction > 0), RULE.serviceCap);
+
+    const c = consistency(result);
+    const exit = { group: '出口与泄漏', label: '出口 IP 一致性', short: '出口不一致', deduction: 0, note: '' };
+    if (c.mismatch === true) {
+      const families = (c.distinctV4 >= 2 ? 1 : 0) + (c.distinctV6 >= 2 ? 1 : 0);
+      const extra = Math.max(0, c.distinctV4 - 2) + Math.max(0, c.distinctV6 - 2);
+      exit.deduction = Math.min(RULE.exitCap, (families >= 2 ? RULE.exitBoth : RULE.exitOne) + extra * RULE.exitExtra);
+      const bits = [];
+      if (c.distinctV4 >= 2) bits.push(c.distinctV4 + ' 个不同的 IPv4');
+      if (c.distinctV6 >= 2) bits.push(c.distinctV6 + ' 个不同的 IPv6');
+      exit.note = '检测到 ' + bits.join('、');
+    } else if (c.mismatch === false) exit.note = '各来源出口一致';
+    else { exit.missing = true; exit.note = '能比对的出口地址不够，无法判断是否一致'; }
+    exit.tone = c.mismatch === true ? 'warn' : c.mismatch === false ? 'ok' : 'muted';
+    exit.statusLabel = c.mismatch === true ? '出口不一致' : c.mismatch === false ? '出口一致' : '出口一致性无法判断';
+    items.push(exit);
+
+    const leak = { group: '出口与泄漏', label: 'UDP 出口（STUN）', short: 'UDP 出口', deduction: 0, note: '' };
+    const udp = udpView(result);
+    if (udp.state === 'leak') { leak.deduction = udp.leaked.length >= 2 ? RULE.leakMany : RULE.leakOne; leak.note = '暴露了 ' + udp.leaked.length + ' 个与出口不同的公网地址'; }
+    else if (udp.state === 'clean') leak.note = '未发现泄漏';
+    else { leak.missing = true; leak.note = '没有拿到 UDP 出口地址，不能判断是否泄漏'; }
+    leak.tone = udp.state === 'leak' ? 'bad' : udp.state === 'clean' ? 'ok' : 'muted';
+    leak.statusLabel = 'UDP ' + (udp.state === 'leak' ? '检测到泄漏' : udp.state === 'clean' ? '未发现泄漏' : '无法判断');
+    items.push(leak);
+    return { items: items, typeKnown: typeKnown, hosting: hosting };
+  }
+  // model: 'v1' 网页版规则（原样，全部计入）；'v2' 建议规则：只有网络身份与隐私标记计入分数，
+  // AI 可用性、出口一致性与 UDP 泄漏是路由状况而非 IP 本身的性质，改为状态单列（statusItems）。
+  const SCORED_GROUPS = ['网络身份', '隐私标记'];
+  function score(scene, model) {
+    if (!scene.result || !scene.result.exit) return { total: null, grade: null, items: [], statusItems: [], reason: 'no-exit' };
+    const built = buildItems(scene.result);
+    const items = model === 'v2' ? built.items.filter((item) => SCORED_GROUPS.includes(item.group)) : built.items;
+    const statusItems = built.items.filter((item) => !items.includes(item));
+    const unscored = (reason, extra) => Object.assign({ total: null, grade: null, items: items, statusItems: statusItems, reason: reason, hosting: built.hosting }, extra || {});
+    const total = Math.max(0, 100 - items.reduce((sum, item) => sum + item.deduction, 0));
+    if (!built.typeKnown) return unscored('no-type');
+    const missing = items.filter((item) => item.missing && item.gate);
+    // 关键项没有数据、而乐观计分又会落到「纯净」时不评分：未知项不能按安全计。
+    if (missing.length && total >= RULE.good) return unscored('missing', { missing: missing });
+    return { total: total, grade: total >= RULE.good ? 'good' : total >= RULE.warn ? 'warn' : 'bad', items: items, statusItems: statusItems, hosting: built.hosting };
+  }
+  // 单独给某个出口算纯净度（分流时 AI 服务看到的是另一个地址）。
+  function purityOf(ip, intel) {
+    return score({ result: { exit: { ip: ip }, intel: intel, services: [], exits: [], udp: noUdp } }, 'v2');
+  }
+
+  /* ---------- 状态 ---------- */
+  const state = { scene: 'datacenter', model: 'v2', win: '1280', run: null, back: 'idle', slow: false };
+  let slowTimer = 0;
+
+  function stopTimers() {
+    if (state.run && state.run.timer) clearTimeout(state.run.timer);
+    clearTimeout(slowTimer);
+  }
+  function isRunning() {
+    return !!state.run || SCENES[state.scene].phase === 'running';
+  }
+  // 等待超过 8 秒：暂停动效并提示，不让加载指示无限转下去。
+  function armSlow() {
+    clearTimeout(slowTimer);
+    slowTimer = setTimeout(function () {
+      if (isRunning()) { state.slow = true; render(); }
+    }, 8000);
+  }
+  function setScene(id) {
+    stopTimers();
+    state.run = null;
+    state.slow = false;
+    state.scene = id;
+    if (sceneSelect) sceneSelect.value = id;
+    if (SCENES[id].phase === 'running') armSlow();
+    render();
+  }
+  function startRun() {
+    stopTimers();
+    state.back = SCENES[state.scene].phase === 'running' ? 'idle' : state.scene;
+    state.run = { progress: 0, timer: 0 };
+    state.slow = false;
+    armSlow();
+    step();
+  }
+  function step() {
+    if (!state.run) return;
+    render();
+    state.run.timer = setTimeout(function () {
+      if (!state.run) return;
+      if (state.run.progress >= 5) setScene('datacenter');
+      else { state.run.progress += 1; step(); }
+    }, 620);
+  }
+  function cancelRun() {
+    setScene(SCENES[state.back].phase === 'running' ? 'idle' : state.back);
+  }
+
+  /* ---------- 渲染：小部件 ---------- */
+  function cardHead(title, note) {
+    return '<div class="card-head"><h2>' + title + '</h2><span class="head-note">' + note + '</span></div>';
+  }
+  function pill(tone, text) {
+    return '<span class="pill ' + tone + '">' + icon(TONE_ICON[tone]) + text + '</span>';
+  }
+  function gradeTone(total) { return total >= RULE.good ? 'ok' : total >= RULE.warn ? 'warn' : 'bad'; }
+  function ring(value, tone, big, small, running) {
+    const label = tone === 'none' ? '尚无评分' : '评分 ' + big;
+    return '<div class="ring-wrap"><svg class="ring" viewBox="0 0 120 120" role="img" aria-label="' + label + '">' +
+      '<circle class="ring-track" cx="60" cy="60" r="52"/>' +
+      '<circle class="ring-value ' + tone + (running ? ' run' : '') + '" cx="60" cy="60" r="52" style="--p:' + value + '"/></svg>' +
+      '<div class="ring-label"><b>' + big + '</b><small>' + small + '</small></div></div>';
+  }
+  function apiText(api) {
+    if (api.reachable) return '可达 ' + api.ms + ' ms';
+    return api.status ? '已拒绝 · HTTP ' + api.status : '不可达 · 请求超时';
+  }
+  function flagCell(name, value) {
+    const cls = value === true ? 'hit' : value === false ? 'ok' : 'unknown';
+    const text = value === true ? '已标记' : value === false ? '无' : '未知';
+    return '<div class="flag ' + cls + '">' + icon(value === true ? 'bad' : value === false ? 'ok' : 'help') + '<span>' + name + '</span><b>' + text + '</b></div>';
+  }
+  function typePill(intel) {
+    const type = intel.type;
+    if (!type) return pill('muted', '类型未知');
+    return pill(TYPE[type][0], TYPE[type][1]);
+  }
+
+  /* ---------- 渲染：结果卡 ---------- */
+  function heroTop(meta, actions, tone) {
+    return '<div class="hero-top"><div class="hero-meta ' + (tone ? 'is-' + tone : '') + '" aria-live="polite">' + meta + '</div>' +
+      '<div class="hero-actions">' + actions + '</div></div>';
+  }
+  const startButton = (label) => '<button type="button" class="btn btn-primary" data-act="start">' + label + '</button>';
+  const cancelButton = '<button type="button" class="btn" data-act="cancel">取消</button>';
+
+  function heroIdle() {
+    const checks = CHECKS.map((item) => '<li class="check">' + icon('help') + '<span><b>' + item[0] + '</b><small>' + item[1] + '</small></span></li>').join('');
+    return '<section class="card hero">' + heroTop(icon('help') + '<span>尚未检测</span>', startButton('开始检测')) +
+      '<div class="hero-grid"><div class="zone-verdict"><div class="verdict">' + ring(0, 'none', '—', '尚无评分') +
+      '<div class="verdict-text"><div class="grade none">等待检测</div><p>点击「开始检测」，约 10 秒完成 6 项检查。请求由本机直接发往第三方服务，不经过 DL小工具 的服务器。</p></div></div></div>' +
+      '<div class="zone-id"><div class="id-lead">将检查</div><ul class="checklist">' + checks + '</ul></div></div></section>';
+  }
+
+  function idleNotes() {
+    return '<section class="card">' + cardHead('检测说明', '') + '<ul class="facts">' +
+      '<li><b>请求直连第三方</b><span>由本机直接发往 Cloudflare、IPinfo、ip-api、OpenAI、Anthropic 等，不经过 DL小工具 的服务器，也不保存结果。</span></li>' +
+      '<li><b>跟随系统代理</b><span>桌面版走系统代理与路由（含 TUN 模式）；浏览器扩展形式的代理对本检测不生效。</span></li>' +
+      '<li><b>结果有时效</b><span>只反映检测时刻的网络状态。切换节点或代理规则后，点「重新检测」。</span></li>' +
+    '</ul></section>';
+  }
+
+  function heroFailed(scene) {
+    const errors = scene.errors.map((text) => '<li>' + icon('bad') + '<span>' + esc(text) + '</span></li>').join('');
+    return '<section class="card hero">' + heroTop(icon('bad') + '<span>检测失败 · ' + scene.meta + '</span>', startButton('重新检测'), 'bad') +
+      '<div class="hero-grid"><div class="zone-verdict"><div class="verdict">' + ring(0, 'none', '—', '无法获取') +
+      '<div class="verdict-text"><div class="grade bad">未能获取出口 IP</div><p>' + scene.summary + '</p></div></div></div>' +
+      '<div class="zone-id"><div class="id-lead">各数据源的返回</div><ul class="errors">' + errors + '</ul></div></div></section>';
+  }
+
+  // progress（检测中）限定只显示已完成检查的服务：未出结果的服务不提前透露。
+  function identityDone(scene, model, progress) {
+    const r = scene.result, intel = r.intel, f = intel.flags, place = r.place;
+    const split = r.services.filter((s, index) => (progress === undefined || progress >= 3 + index) && s.trace.reachable && s.trace.ip !== r.exit.ip);
+    const parts = split.map((s) => {
+      let text = s.name + ' → ' + s.trace.ip;
+      if (model === 'v2' && s.exitIntel) {
+        const purity = purityOf(s.trace.ip, s.exitIntel).total;
+        const hits = FLAGS.filter(([key]) => s.exitIntel.flags[key] === true).map(([, name]) => name);
+        text += '（' + TYPE[s.exitIntel.type][1] + (hits.length ? ' + ' + hits.join(' + ') : '') + (purity === null ? '' : '，纯净度 ' + purity) + '）';
+      } else text += '（未套用本出口的风险标记）';
+      return text;
+    });
+    return '<div class="zone-id">' +
+      '<div class="id-head"><span class="id-ip mono">' + esc(r.exit.ip) + '</span>' +
+        '<button type="button" class="icon-btn" data-act="copy" data-ip="' + esc(r.exit.ip) + '" aria-label="复制出口 IP">' + icon('copy') + '</button>' + typePill(intel) + '</div>' +
+      '<div class="id-loc"><b>' + place.name + '</b>（' + place.code + '）· ' + place.region + ' · ' + place.city + (f.mobile ? ' · 移动网络' : '') + '</div>' +
+      '<div class="id-asn"><span class="mono">' + esc(intel.asn) + '</span> ' + esc(intel.asnName) + (intel.org && intel.org !== intel.asnName ? ' · ' + esc(intel.org) : '') + '</div>' +
+      '<div class="flags">' + FLAGS.map(([key, name]) => flagCell(name, f[key])).join('') + '</div>' +
+      '<div class="id-src">情报来源 ' + intel.source + ' · ' + CONF[intel.confidence] + '</div>' +
+      (split.length ? '<div class="split-note">' + icon('warn') + '<div><b>AI 服务看到的是另一个出口</b><br>' + parts.join('；') + '</div></div>' : '') +
+    '</div>';
+  }
+
+  function heroDone(scene, sc) {
+    const r = scene.result, model = state.model;
+    const chips = sc.items.filter((item) => item.deduction > 0).map((item) => '<span class="ded"><b>−' + item.deduction + '</b> ' + item.short + '</span>');
+    sc.items.filter((item) => item.missing).forEach((item) => chips.push('<span class="ded">' + item.short + ' 数据不足</span>'));
+    if (sc.total !== null && sc.hosting === true) chips.push('<span class="ded">机房 IP 最高 65 分</span>');
+    const pills = '<div class="ai-line"><span class="ai-caption">AI 直连</span>' +
+      r.services.map((s) => pill(SVC[s.status][0], s.name + ' ' + SVC[s.status][1])).join('') + '</div>';
+    // 建议规则下不计入分数的两组路由状况，放在同一处一眼看完。
+    const envLine = model === 'v2' ? '<div class="ai-line"><span class="ai-caption">出口与泄漏</span>' +
+      sc.statusItems.filter((item) => item.group === '出口与泄漏').map((item) => pill(item.tone, item.statusLabel)).join('') + '</div>' : '';
+    const ruleNote = model === 'v2'
+      ? '分数只评价出口 IP 本身（网络身份、隐私标记）；AI 可用性、出口一致性与 UDP 泄漏是路由状况，作为状态单列，不计入分数。'
+      : '从 100 分扣起，含 AI 服务可用性、出口一致性与泄漏（AI 合计最多扣 32 分）。';
+    const unscored = sc.total === null;
+    return '<section class="card hero">' + heroTop(icon('ok') + '<span>检测完成 · ' + scene.meta + '</span>', startButton('重新检测'), 'ok') +
+      '<div class="hero-grid"><div class="zone-verdict">' +
+        '<div class="verdict">' + (unscored ? ring(0, 'none', '—', '无法评分') : ring(sc.total, sc.grade, sc.total, '/ 100')) +
+          '<div class="verdict-text"><div class="grade ' + (unscored ? 'none' : sc.grade) + '">' + (unscored ? '无法评分' : GRADE[sc.grade]) + '</div><p>' + scene.summary[model] + '</p></div></div>' +
+        pills + envLine +
+      '</div>' + identityDone(scene, model) +
+      (unscored ? '' : '<div class="hero-foot"><div class="ded-line">' + (chips.length ? chips.join('') : '<span class="ded">无扣分</span>') + '</div><p class="rule-note">' + ruleNote + '</p></div>') +
+      '</div></section>';
+  }
+
+  /* ---------- 渲染：明细卡 ---------- */
+  function serviceArticle(s, r, model) {
+    const other = s.trace.reachable && s.trace.ip !== r.exit.ip;
+    let exitIntel = '';
+    if (other && model === 'v2' && s.exitIntel) {
+      const purity = purityOf(s.trace.ip, s.exitIntel).total;
+      exitIntel = '<div class="exit-intel">' + typePill(s.exitIntel) +
+        FLAGS.filter(([key]) => s.exitIntel.flags[key] === true).map(([, name]) => pill('bad', '已标记 ' + name)).join('') +
+        (purity === null ? '' : pill(gradeTone(purity), '纯净度 ' + purity)) + '</div>';
+    }
+    return '<article class="svc"><div class="svc-main"><div class="svc-name">' + s.name + '<span class="svc-vendor">' + s.vendor + '</span></div>' + pill(SVC[s.status][0], SVC[s.status][1]) + '</div>' +
+      '<dl class="kv">' +
+        '<div><dt>该服务看到的出口</dt><dd>' + (s.trace.reachable ? '<span class="mono">' + s.trace.ip + '</span> · ' + (COUNTRY[s.trace.loc] || '地区未知') : '无法获取') + '</dd></div>' +
+        '<div><dt>接口 / 网站</dt><dd>' + apiText(s.api) + ' / ' + (s.trace.reachable ? '可达 ' + s.trace.ms + ' ms' : '不可达 · 请求超时') + '</dd></div>' +
+        '<div><dt>地区检查</dt><dd>' + s.regionText + '</dd></div>' +
+      '</dl>' + exitIntel +
+      s.notes.map((text) => '<p class="note">' + text + '</p>').join('') +
+      '<a class="link-btn" href="' + s.site + '" target="_blank" rel="noopener noreferrer">用浏览器打开 ' + s.host + ' 实测' + icon('out') + '</a>' +
+    '</article>';
+  }
+  function pendingArticle(s) {
+    return '<article class="svc svc-pending"><span class="skel w30"></span><span class="skel w60"></span><p class="note">等待 ' + s.host + ' 与接口响应…</p></article>';
+  }
+  function aiCard(scene, progress) {
+    const r = scene.result;
+    return '<section class="card">' + cardHead('AI 服务', '接口与网站的连通性、地区支持') +
+      r.services.map((s, index) => progress === undefined || progress >= 3 + index ? serviceArticle(s, r, state.model) : pendingArticle(s)).join('') + '</section>';
+  }
+
+  function consTable(c, r) {
+    return '<table class="mini"><colgroup><col style="width:96px"><col><col style="width:112px"></colgroup>' +
+      '<thead><tr><th scope="col">来源</th><th scope="col">地址</th><th scope="col">结果</th></tr></thead><tbody>' +
+      c.rows.map((row) => {
+        const cls = row.align === 'diff' ? 't-bad' : row.align === 'single' ? 't-muted' : 't-ok';
+        const text = row.align === 'diff' ? '不一致' : row.align === 'single' ? '无法比对' : row.ip === r.exit.ip ? '与出口一致' : '一致';
+        return '<tr><td>' + row.source + '</td><td class="mono" title="' + row.ip + '">' + row.ip + '</td><td class="' + cls + '">' + text + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+  function udpTable(u, r) {
+    return '<table class="mini"><colgroup><col><col style="width:132px"><col style="width:96px"></colgroup>' +
+      '<thead><tr><th scope="col">STUN 服务器</th><th scope="col">UDP 出口</th><th scope="col">结果</th></tr></thead><tbody>' +
+      u.entries.map((entry) => {
+        const ip = entry.hit ? entry.hit[0] : '';
+        let cls = 't-muted', text = '未响应';
+        if (ip) {
+          if (ip === r.exit.ip) { cls = 't-ok'; text = '与出口一致'; }
+          else if (entry.zone === 'mainland') text = '国内直连';
+          else { cls = 't-bad'; text = '与出口不同'; }
+        }
+        return '<tr><td title="' + entry.host + '">' + entry.host + '</td><td class="mono">' + (ip || '—') + '</td><td class="' + cls + '">' + text + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+  function udpPill(u) {
+    if (u.state === 'leak') return pill('bad', '检测到泄漏');
+    return u.state === 'clean' ? pill('ok', '未发现泄漏') : pill('muted', '无法判断');
+  }
+  function udpNote(scene, u) {
+    if (scene.udpNote) return scene.udpNote;
+    if (u.state === 'leak') return 'UDP 流量没有经过代理：境外 STUN 看到的地址与出口不同。浏览器的 WebRTC 同样走 UDP，通常会暴露这个地址。';
+    if (u.state === 'clean') return '未发现与出口不同的 UDP 公网地址，UDP 没有绕过代理。';
+    return '没有 STUN 服务器返回地址（UDP 被拦截或超时）。零响应不等于安全，不能据此判断是否泄漏。';
+  }
+  function exitCard(scene, progress) {
+    const r = scene.result, c = consistency(r), u = udpView(r);
+    const dualStack = r.exits.some((row) => row.ip.indexOf(':') >= 0);
+    const pending = progress !== undefined && progress < 5;
+    const consPill = pending ? pill('muted', '等待汇总')
+      : c.mismatch === true ? pill('warn', c.distinctV4 + ' 个不同的 IPv4 出口')
+      : c.mismatch === false ? pill('ok', '各来源出口一致') : pill('muted', '无法判断');
+    const consNote = pending ? '全部检查完成后汇总各服务看到的出口。'
+      : c.mismatch === null ? '同一协议内能比对的出口地址不够，无法判断是否一致。'
+      : c.mismatch ? '不同服务看到的出口不同：存在分流或多出口，部分请求可能没有经过代理。'
+      : dualStack ? '当前是双栈网络：支持 IPv6 的网站可能通过另一个地址访问。' : '';
+    const consBody = progress !== undefined && progress < 5 ? '' : consTable(c, r);
+    const udpBody = progress !== undefined && progress < 5 ? '<p class="note">正在向 4 台 STUN 服务器发送 UDP 请求…</p>'
+      : udpTable(u, r) + '<p class="note">' + udpNote(scene, u) + '</p>';
+    const udpState = progress !== undefined && progress < 5 ? pill('muted', '检测中') : udpPill(u);
+    return '<section class="card">' + cardHead('出口与泄漏', '') +
+      '<div class="sub"><div class="sub-head"><h3>出口一致性</h3>' + consPill + '</div>' + consBody +
+        (consNote ? '<p class="note">' + consNote + '</p>' : '') + '</div>' +
+      '<div class="sub udp"><div class="sub-head"><h3>UDP 出口<span class="hint">STUN</span></h3>' + udpState + '</div>' + udpBody + '</div>' +
+    '</section>';
+  }
+
+  function detailRows(items) {
+    let group = '';
+    return items.map((item) => {
+      let value, cls;
+      if (item.missing) { value = '数据不足'; cls = 'miss'; }
+      else if (item.deduction > 0) { value = '−' + item.deduction; cls = 'hit'; }
+      else { value = '0'; cls = 'zero'; }
+      const note = item.note + (item.absorbed ? '（已达上限，此项不再重复扣）' : item.capped ? '（已达上限，已降低扣分）' : '');
+      const row = '<tr><td class="grp">' + (item.group === group ? '' : item.group) + '</td><td>' + item.label + '</td><td class="num ' + cls + '">' + value + '</td><td class="ev">' + note + '</td></tr>';
+      group = item.group;
+      return row;
+    }).join('');
+  }
+  function detailCard(scene, sc) {
+    const model = state.model;
+    let body;
+    if (sc.total === null) {
+      const lead = sc.reason === 'no-type' ? '已拿到资料，但没有判定出 IP 类型。'
+        : sc.missing.map((item) => item.label).join('、') + '没有数据。这些项按未命中计分会得到纯净结果，因此本次不评分。';
+      body = '<p class="unscored-lead">' + lead + '</p><ul class="unscored">' +
+        sc.items.map((item) => '<li><span>' + item.label + '</span><b>' + (item.missing ? '数据不足' : '未计入') + '</b></li>').join('') + '</ul>';
+    } else {
+      body = '<table class="ded-table"><colgroup><col style="width:64px"><col style="width:132px"><col style="width:52px"><col></colgroup>' +
+        '<thead><tr><th scope="col">分组</th><th scope="col">项目</th><th scope="col">扣分</th><th scope="col">依据</th></tr></thead><tbody>' +
+        detailRows(sc.items) + '</tbody></table>';
+    }
+    if (model === 'v2') {
+      body += '<h3 class="sub-title">单列状态（不计入分数）</h3>' +
+        '<table class="ded-table"><colgroup><col style="width:196px"><col><col></colgroup>' +
+        '<thead><tr><th scope="col">项目</th><th scope="col">状态</th><th scope="col">说明</th></tr></thead><tbody>' +
+        sc.statusItems.map((item) => '<tr><td>' + item.label + '</td><td>' + pill(item.tone, item.statusLabel) + '</td><td class="ev">' + item.note + '</td></tr>').join('') +
+        '</tbody></table>';
+    }
+    return '<section class="card">' + cardHead('评分明细与建议', model === 'v2' ? '分数只评价出口 IP 本身 · 其余单列为状态' : '从 100 分扣起 · 含 AI 服务可用性') +
+      '<div class="detail-grid"><div>' + body + '</div><div class="advice"><h3>建议</h3><ul>' +
+      scene.advice.map((text) => '<li>' + text + '</li>').join('') + '</ul></div></div></section>';
+  }
+  function footer(scene) {
+    const ip = scene.result.exit.ip;
+    const links = [['IPinfo', 'https://ipinfo.io/' + ip], ['Scamalytics', 'https://scamalytics.com/ip/' + ip],
+      ['AbuseIPDB', 'https://www.abuseipdb.com/check/' + ip], ['VirusTotal', 'https://www.virustotal.com/gui/ip-address/' + ip]];
+    return '<footer class="pg-foot"><p>在其他平台查看 ' + ip + '：' +
+      links.map(([name, href]) => '<a class="link-btn" href="' + href + '" target="_blank" rel="noopener noreferrer">' + name + '</a>').join('<span class="sep" aria-hidden="true">·</span>') + '</p>' +
+      '<p>请求由本机直接发往 Cloudflare、IPinfo、ip-api、OpenAI、Anthropic 等第三方，不经过 DL小工具 的服务器，也不保存结果。结果仅反映检测时刻的网络状态；桌面版跟随系统代理与路由，浏览器扩展代理不生效。</p></footer>';
+  }
+
+  /* ---------- 渲染：检测中（progress = 已完成的检查项数，0～5） ---------- */
+  function identityRunning(progress, scene) {
+    if (progress >= 2) return identityDone(scene, state.model, progress);
+    // 0/6：出口 IP 还没回来，只放占位；1/6：已有 IP，类型与风险仍在获取。
+    const ipLine = progress >= 1
+      ? '<div class="id-head"><span class="id-ip mono">' + scene.result.exit.ip + '</span>' + pill('muted', '类型待定') + '</div>'
+      : '<span class="skel w45" style="height:24px"></span>';
+    return '<div class="zone-id"><div class="id-lead">' + (progress >= 1 ? '已获取出口 IP，正在获取类型与风险' : '正在获取出口 IP') + '</div>' +
+      ipLine + '<span class="skel w60"></span><span class="skel w80"></span></div>';
+  }
+  function runningBody(progress, scene) {
+    const r = scene.result;
+    const done = progress >= 6;
+    const meta = '<span class="progress" role="progressbar" aria-label="检测进度" aria-valuemin="0" aria-valuemax="6" aria-valuenow="' + progress + '">' +
+      '<i style="width:' + Math.round(progress / 6 * 100) + '%"></i></span>' +
+      '<span>' + (state.slow ? '部分接口响应缓慢，可取消后重试' : STAGE_LABEL[Math.min(progress, 5)]) + ' · ' + progress + '/6</span>';
+    const pills = '<div class="ai-line"><span class="ai-caption">AI 直连</span>' + r.services.map((s, index) =>
+      progress >= 3 + index ? pill(SVC[s.status][0], s.name + ' ' + SVC[s.status][1]) : '<span class="pill muted">' + icon('help') + s.name + ' 检测中</span>').join('') + '</div>';
+    return '<section class="card hero">' + heroTop(meta, cancelButton) +
+      '<div class="hero-grid"><div class="zone-verdict"><div class="verdict">' + ring(0, 'none', '…', progress + ' / 6', true) +
+        '<div class="verdict-text"><div class="grade none">检测中</div><p>已完成 ' + progress + ' / 6 项' + (state.slow ? '。' + STAGE_LABEL[Math.min(progress, 5)] + '超过 8 秒' : '') + '</p></div></div>' +
+        (progress >= 2 ? pills : '') + '</div>' + identityRunning(progress, scene) + '</div></section>' +
+      '<div class="row-b">' + aiCard(scene, progress) + exitCard(scene, progress) + '</div>';
+  }
+
+  /* ---------- 渲染：整页 ---------- */
+  function render() {
+    const scene = SCENES[state.scene];
+    page.classList.toggle('is-slow', state.slow);
+    let body;
+    if (state.run) body = runningBody(state.run.progress, SCENES.datacenter);
+    else if (scene.phase === 'idle') body = heroIdle() + idleNotes();
+    else if (scene.phase === 'failed') body = heroFailed(scene);
+    else if (scene.phase === 'running') body = runningBody(scene.progress, SCENES.datacenter);
+    else {
+      const sc = score(scene, state.model);
+      body = heroDone(scene, sc) + '<div class="row-b">' + aiCard(scene) + exitCard(scene) + '</div>' + detailCard(scene, sc) + footer(scene);
+    }
+    page.innerHTML = '<div class="pg-head"><h1>IP 纯净度检测</h1><p>检测当前出口 IP 的类型与风险，以及 ChatGPT / Claude 能否直连。</p></div>' +
+      '<div class="pg-scroll">' + body + '</div>';
+    fit();
+  }
+  function fit() {
+    const narrow = state.win === '1000';
+    const winW = narrow ? 1000 : 1280;
+    const scale = Math.min(1, winBox.clientWidth / winW);
+    root.style.setProperty('--win-w', winW + 'px');
+    root.style.setProperty('--win-h', (narrow ? 700 : 800) + 'px');
+    root.style.setProperty('--scale', String(scale));
+    app.classList.toggle('fixed', state.win !== 'full');
+    winBox.style.height = Math.ceil(app.offsetHeight * scale) + 'px';
+  }
+
+  /* ---------- 交互 ---------- */
+  function copyIp(button) {
+    const show = (text) => {
+      button.parentNode.querySelectorAll('.copied').forEach((node) => node.remove());
+      const label = document.createElement('span');
+      label.className = 'copied';
+      label.setAttribute('role', 'status');
+      label.textContent = text;
+      button.insertAdjacentElement('afterend', label);
+      setTimeout(() => label.remove(), 1600);
+    };
+    const write = navigator.clipboard && navigator.clipboard.writeText;
+    if (!write) { show('无法访问剪贴板'); return; }
+    write.call(navigator.clipboard, button.dataset.ip).then(() => show('已复制'), () => show('复制失败'));
+  }
+  root.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-act]');
+    if (!button || !root.contains(button)) return;
+    if (button.dataset.act === 'start') startRun();
+    else if (button.dataset.act === 'cancel') cancelRun();
+    else if (button.dataset.act === 'copy') copyIp(button);
+  });
+  root.querySelectorAll('.notes [data-target]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const target = page.querySelector(button.dataset.target);
+      if (!target) return;
+      target.classList.add('hl');
+      setTimeout(() => target.classList.remove('hl'), 2400);
+    });
+  });
+  if (sceneSelect) {
+    Object.keys(SCENES).forEach((id) => {
+      const option = document.createElement('option');
+      option.value = id;
+      option.textContent = SCENES[id].label;
+      sceneSelect.appendChild(option);
+    });
+    sceneSelect.addEventListener('change', () => setScene(sceneSelect.value));
+  }
+  root.querySelectorAll('input[name="demo-model"]').forEach((input) => {
+    input.checked = input.value === state.model;
+    input.addEventListener('change', () => { state.model = input.value; render(); });
+  });
+  root.querySelectorAll('input[name="demo-win"]').forEach((input) => {
+    input.checked = input.value === state.win;
+    input.addEventListener('change', () => { state.win = input.value; render(); });
+  });
+  // 通过地址 hash 直接打开某个状态，例如 #scene=split&model=v1&win=full
+  const params = new URLSearchParams(location.hash.slice(1));
+  if (SCENES[params.get('scene')]) state.scene = params.get('scene');
+  // 检测中场景可指定进度：#scene=running&progress=0～5
+  if (/^[0-5]$/.test(params.get('progress') || '')) SCENES.running.progress = Number(params.get('progress'));
+  if (SCENES[state.scene].phase === 'running') armSlow();
+  if (params.get('model') === 'v1' || params.get('model') === 'v2') state.model = params.get('model');
+  if (['1280', '1000', 'full'].includes(params.get('win'))) state.win = params.get('win');
+  if (sceneSelect) sceneSelect.value = state.scene;
+  root.querySelectorAll('input[name="demo-model"]').forEach((input) => { input.checked = input.value === state.model; });
+  root.querySelectorAll('input[name="demo-win"]').forEach((input) => { input.checked = input.value === state.win; });
+
+  // 核对入口挂在根节点上（不占用全局名）：核对脚本用它拿设计稿的评分函数与场景数据。
+  root.ipq = { score: score, scenes: SCENES, rule: RULE };
+
+  render();
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(winBox);
+  else window.addEventListener('resize', fit);
+})();
+</script>
+<!--@@JS_END@@-->
+</body>
+</html>

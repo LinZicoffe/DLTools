@@ -6,6 +6,7 @@ public enum BackgroundOperationKind
     Packaging,
     Authorization,
     IpScanning,
+    IpPurityCheck,
     DiskCleanup
 }
 
