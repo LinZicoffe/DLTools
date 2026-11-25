@@ -3,11 +3,16 @@ using 烧录上位机程序.Models.IpPurity;
 namespace 烧录上位机程序.Services.IpPurity;
 
 /// <summary>纯净度评分。ComputeV1 与上游 score.js 逐项对齐，只作为差分基准；
-/// 界面使用 ComputeV2：分数只含网络身份和隐私标记，其余是状态。</summary>
+/// 界面使用 ComputeV2：分数只含网络身份和隐私标记，其余是状态。
+/// v2 另有两条：只有一份隐私库时，VPN、代理、中继按权重一半计入，Tor 不减；
+/// 只要被标为机房，等级最高为「一般」。</summary>
 public static class IpPurityScoring
 {
     public const string Footnote =
         "隐私标记同时命中时会递减，合计最多扣 50 分；AI 服务合计最多扣 32 分。机房扣分随情报准确度下降，只靠组织名匹配不会按已确认机房的额度扣满。";
+
+    private const string V2Footnote =
+        "隐私标记同时命中时会递减，合计最多扣 50 分。目前只有一份隐私库，VPN、代理和中继按一半计入，Tor 不减。机房扣分随情报准确度下降；只要被标为机房，等级最高为「一般」。AI 可用性、出口一致性与 UDP 泄漏不计入分数。";
 
     private const int BusinessPoints = 10;
     private const int EducationPoints = 16;
@@ -36,15 +41,15 @@ public static class IpPurityScoring
     ];
 
     public static IpPurityScore ComputeV1(IpPurityScoreRequest request) =>
-        Finalize(Build(request), scoredOnly: false);
+        Finalize(Build(request, halveSingleSourcePrivacy: false), scoredOnly: false);
 
     public static IpPurityScore ComputeV2(IpPurityScoreRequest request) =>
-        Finalize(Build(request), scoredOnly: true);
+        Finalize(Build(request, halveSingleSourcePrivacy: true), scoredOnly: true);
 
     public static IpPurityScore PurityOf(string ip, IpPurityIntel intel) =>
         ComputeV2(new IpPurityScoreRequest(ip, IpPurityParse.ToScoreIntel(intel), [], null, null));
 
-    private static Built Build(IpPurityScoreRequest request)
+    private static Built Build(IpPurityScoreRequest request, bool halveSingleSourcePrivacy)
     {
         if (string.IsNullOrEmpty(request.ExitIp))
         {
@@ -150,7 +155,9 @@ public static class IpPurityScoring
             }
             var tier = tierOf[meta.Key];
             var factor = tier == 0 ? 1d : tier == 1 ? 0.5d : 0.25d;
-            row.Deduction = (int)Math.Round(PrivacyWeight[meta.Key] * factor, MidpointRounding.AwayFromZero);
+            var weight = (double)PrivacyWeight[meta.Key];
+            if (halveSingleSourcePrivacy && meta.Key != "tor") weight *= 0.5;
+            row.Deduction = (int)Math.Round(weight * factor, MidpointRounding.AwayFromZero);
             if (tier == 1) row.TierText = "，与更强的标记同时出现，按一半计入";
             if (tier == 2) row.TierText = "，与更强的标记同时出现，按较低权重计入";
             return row;
@@ -412,7 +419,10 @@ public static class IpPurityScoring
             text = "风险信号明显，容易触发人机验证或封号，不建议用于账号操作。";
         }
 
-        var grade = total >= GradeGood
+        // 机房扣分再少，v2 也不给「纯净」。低准确度现在扣 18、得到 82，本来就低于 85；
+        // 这里把上限写成规则，避免以后扣分变少时又显示纯净。v1 不套用这条。
+        var hostingGradeCeiling = scoredOnly && built.Hosting == true;
+        var grade = total >= GradeGood && !hostingGradeCeiling
             ? new IpPurityGrade("good", "纯净", text)
             : total >= GradeWarn
                 ? new IpPurityGrade("warn", "一般", text)
@@ -430,7 +440,7 @@ public static class IpPurityScoring
     {
         var services = built.Services;
         var allBlocked = services.Count > 0 && services.All(service => service.Status == IpPurityCodes.Blocked);
-        if (total >= GradeGood)
+        if (total >= GradeGood && built.Hosting != true)
         {
             string sentence;
             if (allBlocked && built.Hosting == false && privacySpent == 0 && built.Type is null or IpPurityCodes.Isp)
@@ -581,12 +591,12 @@ public static class IpPurityScoring
         var footnote = total is null && advice.Count == 1 && advice[0].StartsWith("未能获取出口 IP", StringComparison.Ordinal)
             ? ""
             : scoredOnly
-                ? "隐私标记同时命中时会递减，合计最多扣 50 分。机房扣分随情报准确度下降。AI 可用性、出口一致性与 UDP 泄漏不计入分数。"
+                ? V2Footnote
                 : Footnote;
         if (total is null && note.Length == 0 && grade is null && advice.Count > 0 && advice[0].Contains("无法计算纯净度评分", StringComparison.Ordinal))
         {
             footnote = scoredOnly
-                ? "隐私标记同时命中时会递减，合计最多扣 50 分。机房扣分随情报准确度下降。AI 可用性、出口一致性与 UDP 泄漏不计入分数。"
+                ? V2Footnote
                 : Footnote;
         }
         return new IpPurityScore(

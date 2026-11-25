@@ -61,18 +61,55 @@ public class IpPurityScoringTests
         Assert.Equal("纯净", residential.Grade!.Label);
         Assert.Equal(65, cleanDc.Total);
         Assert.Equal("一般", cleanDc.Grade!.Label);
-        Assert.Equal(43, proxy.Total);
+        Assert.Equal(54, proxy.Total);
+        Assert.Equal(11, proxy.Items.Single(item => item.Label == "代理标记").Deduction);
         Assert.Equal("高风险", proxy.Grade!.Label);
         Assert.Contains("代理标记", proxy.Grade.Text, StringComparison.Ordinal);
         Assert.Equal(100, mainland.Total);
         Assert.Contains("住宅宽带", mainland.Grade!.Text, StringComparison.Ordinal);
-        Assert.Equal(41, split.Total);
+        Assert.Equal(53, split.Total);
+        Assert.Equal(12, split.Items.Single(item => item.Label == "VPN 标记").Deduction);
         Assert.Contains("UDP 流量绕过了代理", split.Grade!.Text, StringComparison.Ordinal);
         Assert.Null(unknown.Total);
         Assert.Contains("没有数据", unknown.Advice[0], StringComparison.Ordinal);
         Assert.DoesNotContain(proxy.Items, item => item.Group == "AI 服务");
         Assert.Contains(proxy.StatusItems, item => item.Group == "AI 服务");
     }
+
+    [Fact]
+    public void V2_HalvesVpnProxyRelayKeepsTorAndCapsHostingGrade()
+    {
+        var vpn = IpPurityScoring.ComputeV2(Scene(false, "isp", "high", true, false, "ok", "ok", false, "clean"));
+        var proxyOnly = IpPurityScoring.ComputeV2(Flagged(proxy: true));
+        var relay = IpPurityScoring.ComputeV2(Flagged(relay: true));
+        var tor = IpPurityScoring.ComputeV2(Flagged(tor: true));
+        var lowDatacenter = IpPurityScoring.ComputeV2(Scene(true, "hosting", "low", false, false, "ok", "ok", false, "clean"));
+        var v1Vpn = IpPurityScoring.ComputeV1(Scene(false, "isp", "high", true, false, "ok", "ok", false, "clean"));
+
+        Assert.Equal(12, vpn.Items.Single(item => item.Label == "VPN 标记").Deduction);
+        Assert.Equal(88, vpn.Total);
+        Assert.Equal("纯净", vpn.Grade!.Label);
+        Assert.Equal(11, proxyOnly.Items.Single(item => item.Label == "代理标记").Deduction);
+        Assert.Equal(89, proxyOnly.Total);
+        Assert.Equal(9, relay.Items.Single(item => item.Label == "中继标记").Deduction);
+        Assert.Equal(91, relay.Total);
+        Assert.Equal(45, tor.Items.Single(item => item.Label == "Tor 标记").Deduction);
+        Assert.Equal(55, tor.Total);
+        Assert.Equal("高风险", tor.Grade!.Label);
+        Assert.Equal(82, lowDatacenter.Total);
+        Assert.Equal("一般", lowDatacenter.Grade!.Label);
+        Assert.Equal("warn", lowDatacenter.Grade.Key);
+        Assert.Contains("组织名", lowDatacenter.Grade.Text, StringComparison.Ordinal);
+        Assert.Equal(24, v1Vpn.Items.Single(item => item.Label == "VPN 标记").Deduction);
+    }
+
+    private static IpPurityScoreRequest Flagged(bool proxy = false, bool tor = false, bool relay = false) =>
+        new(
+            "203.0.113.7",
+            new IpPurityScoreIntel("isp", "high", "IPinfo", false, false, proxy, tor, relay, false),
+            [],
+            null,
+            null);
 
     private static IpPurityScoreRequest Scene(
         bool hosting, string type, string confidence, bool vpn, bool proxy,
